@@ -164,11 +164,22 @@ reachable, so push a tree without any git transport:
    (`name`, `email`, `date`);
 4. `gh api --method PATCH repos/Liu-bits/Terminal-ios/git/refs/heads/main -f sha=<commit> -F force=true`.
 
-To keep local and remote identical (so later `git push` is a plain fast-forward), pass the
-**exact** author/committer name, email and ISO-8601 date to step 3 and reproduce the same
-commit locally with `git commit-tree <tree>` under matching `GIT_AUTHOR_*` /
-`GIT_COMMITTER_*` environment variables: identical metadata + tree + parents yields an
-identical SHA. Commit `049c6fca` was created that way, so `main` and `origin/main` match.
+To keep local and remote identical (so later `git push` is a plain fast-forward), the
+commit object must match **byte for byte**. Two traps, both learned the hard way:
+
+- **The message has no trailing newline.** GitHub stores the message verbatim; `git commit`
+  always appends `\n`, so a commit made with `git commit` can never match. Build the object
+  by hand instead: `printf '%s' '<message with no trailing newline>'` into a file, then
+  `git hash-object -w -t commit --stdin` with the `tree` / `parent` / `author` / `committer`
+  header lines, and point `main` at the result with `git update-ref`.
+- **Dates must be UTC (`+0000`).** GitHub normalises any offset to `Z`, so a local
+  `+0800` commit hashes differently. `git commit --amend --reset-author` with
+  `GIT_AUTHOR_DATE=...T..:..:..+00:00` also works, but the hand-built object is simpler.
+
+`support/push_via_api.py` does the upload and hard-fails if the tree or the commit hash
+disagrees with the local ones, so a mismatch is caught before the ref moves. Commits
+`049c6fca`, `c713c15` and `12eb82c` were all created that way and `main`, `origin/main`
+and the GitHub ref are the same SHA.
 
 Push with `git push` anyway if the network is fixed; the API route is the fallback, not a
 preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/main`.
