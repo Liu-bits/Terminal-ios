@@ -1,4 +1,6 @@
 .DS_Store
+# WorkBuddy 会话数据（记忆、应用清单），不进仓库
+/.workbuddy/
 /fastlane/report.xml
 /fastlane/test_output
 Sources/Carthage
