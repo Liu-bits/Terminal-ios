@@ -558,9 +558,7 @@ enum TextBuiltins {
                 let end = characters[index + 2]
                 if let startValue = start.asciiValue, let endValue = end.asciiValue, startValue <= endValue {
                     for value in startValue...endValue {
-                        if let scalar = Unicode.Scalar(value) {
-                            result.append(Character(scalar))
-                        }
+                        result.append(Character(Unicode.Scalar(value)))
                     }
                     index += 3
                     continue
@@ -770,9 +768,9 @@ enum TextBuiltins {
         var output: [String] = []
         var current = ""
         for byte in data {
-            let isPrintable = byte >= 32 && byte < 127
-            if isPrintable, let scalar = Unicode.Scalar(Int(byte)) {
-                current.append(Character(scalar))
+            // ASCII printable range only; `Unicode.Scalar(UInt8)` cannot fail.
+            if byte >= 32 && byte < 127 {
+                current.append(Character(Unicode.Scalar(byte)))
             } else {
                 if current.count >= minimum {
                     output.append(current)

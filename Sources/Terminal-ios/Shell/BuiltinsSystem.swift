@@ -505,7 +505,7 @@ enum SystemBuiltins {
     }
 
     private static func version(_ args: [String], _ context: ShellRunContext) -> ShellResult {
-        .ok("Terminal-ios shell \(ShellBuiltins.shellVersion) - \(ShellBuiltins.table.count) built-ins, \(ShellBuiltins.packageCommandCount) catalog commands")
+        .ok("Terminal-ios shell \(ShellBuiltins.shellVersion) - \(ShellBuiltins.table.count) built-ins, \(ShellBuiltins.packageCommandNames.count) catalog commands")
     }
 
     // MARK: - Package managers
