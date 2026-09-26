@@ -267,11 +267,12 @@ final class ShellEngine {
     /// noise before whatever `||`/`;` ran next, and the exit status carries
     /// the failure instead.
     private func combine(_ first: ShellResult, _ second: ShellResult) -> ShellResult {
-        var combined = first.exitCode == 0 ? first.output : ""
-        if !combined.isEmpty, !second.output.isEmpty {
+        var combined = first.exitCode == 0 ? first.output.trimmingTrailingNewlines() : ""
+        let tail = second.output.trimmingTrailingNewlines()
+        if !combined.isEmpty, !tail.isEmpty {
             combined += "\n"
         }
-        combined += second.output
+        combined += tail
         return ShellResult(
             output: combined,
             exitCode: second.exitCode,

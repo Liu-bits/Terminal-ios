@@ -96,10 +96,22 @@ struct ShellArgs {
     var longValues: [String: String] = [:]
     var operands: [String] = []
 
+    /// Short flag test (`-l`).
+    ///
+    /// There is deliberately no `has(_ flag: String)` overload: with one, a
+    /// literal like `"l"` binds to the String version, every short flag looks
+    /// absent, and commands silently ignore their options. Long flags have
+    /// separate, explicitly named accessors for the same reason.
     func has(_ flag: Character) -> Bool { flags.contains(flag) }
-    func has(_ flag: String) -> Bool { longFlags.contains(flag) }
+
+    /// Long flag test (`--all`).
+    func hasLong(_ name: String) -> Bool { longFlags.contains(name) }
+
+    /// Value of a short flag that takes one (`-n 5` / `-n5`).
     func value(_ flag: Character) -> String? { values[flag] }
-    func value(_ flag: String) -> String? { longValues[flag] }
+
+    /// Value of a long flag that takes one (`--max=3`).
+    func longValue(_ name: String) -> String? { longValues[name] }
 
     /// Splits `args` into flags and operands.
     ///
@@ -168,6 +180,19 @@ struct ShellArgs {
 }
 
 // MARK: - Shared file helpers
+
+extension String {
+    /// Drops trailing newlines. Built-ins return POSIX-shaped output (with a
+    /// trailing newline); joining two of those needs the newlines removed first
+    /// or every chained command grows a blank line.
+    func trimmingTrailingNewlines() -> String {
+        var text = self
+        while text.hasSuffix("\n") {
+            text.removeLast()
+        }
+        return text
+    }
+}
 
 extension ShellRunContext {
 

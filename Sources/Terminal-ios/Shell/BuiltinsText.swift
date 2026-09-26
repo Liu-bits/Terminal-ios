@@ -176,7 +176,7 @@ enum TextBuiltins {
         if let failure = input.failure {
             return failure
         }
-        let all = parsed.has("ba") || parsed.flags.contains("a")
+        let all = parsed.has("a") || parsed.has("b")
         var number = 0
         var output: [String] = []
         for line in context.lines(input.text ?? "") {
@@ -281,7 +281,8 @@ enum TextBuiltins {
             let outcome = scan(text)
             totalMatches += outcome.matches
             if countOnly {
-                output.append("\(file):\(outcome.matches)")
+                // `grep -c` only prefixes the file name when several are given.
+                output.append(files.count > 1 ? "\(file):\(outcome.matches)" : "\(outcome.matches)")
             } else if filesOnly {
                 if outcome.matches > 0 { output.append(file) }
             } else if files.count > 1 {
@@ -523,7 +524,9 @@ enum TextBuiltins {
         guard let setSpec = parsed.operands.first else {
             return .fail("tr: missing operand", code: 2)
         }
-        let input = context.inputText(named: Array(parsed.operands.dropFirst()), command: "tr")
+        // `tr` reads stdin only: its operands are the character sets, never
+        // input files, so treating extra operands as files would be wrong.
+        let input = context.inputText(named: [], command: "tr")
         if let failure = input.failure {
             return failure
         }

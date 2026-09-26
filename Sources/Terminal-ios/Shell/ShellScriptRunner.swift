@@ -56,8 +56,9 @@ final class ShellScriptRunner {
             let result = evaluate(line)
             lastStatus = result.exitCode
             session.record(status: result.exitCode)
-            if !result.output.isEmpty {
-                output.append(result.output)
+            let text = result.output.trimmingTrailingNewlines()
+            if !text.isEmpty {
+                output.append(text)
             }
 
         case .ifChain(let branches, let elseBody):

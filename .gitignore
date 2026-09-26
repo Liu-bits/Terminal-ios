@@ -1,6 +1,11 @@
 .DS_Store
 # WorkBuddy 会话数据（记忆、应用清单），不进仓库
 /.workbuddy/
+# 本地校验与 CI 日志（support/local_check.py、gh run view 的输出）
+/.check.log
+/.ci.log
+# Swift/链接器在仓库根目录留下的缓存
+/%SystemDrive%/
 /fastlane/report.xml
 /fastlane/test_output
 Sources/Carthage
