@@ -69,6 +69,9 @@ def main() -> int:
     payload_section = ",\n".join(payload_blocks)
 
     triple = '"' * 3
+    # NOTE: the opening delimiter comes from swift_literal(), so the header must
+    # stop at `= ` - emitting it here too closes the literal immediately and the
+    # JSON ends up parsed as Swift code.
     header = (
         "// Copyright © 2026 Liu-bits. All rights reserved.\n"
         "\n"
@@ -81,7 +84,7 @@ def main() -> int:
         "enum BundledCatalog {\n"
         "\n"
         "    /// Raw manifest JSON, byte-identical to catalog/catalog.json.\n"
-        "    static let json = " + triple + "\n"
+        "    static let json = "
     )
 
     output = (

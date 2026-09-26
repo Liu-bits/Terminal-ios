@@ -9,8 +9,7 @@
 enum BundledCatalog {
 
     /// Raw manifest JSON, byte-identical to catalog/catalog.json.
-    static let json = """
-    """
+    static let json =     """
     {
       "schema": 1,
       "name": "Terminal-ios bundled catalog",
