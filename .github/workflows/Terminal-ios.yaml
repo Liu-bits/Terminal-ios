@@ -43,7 +43,6 @@ jobs:
           gem install bundler -N
           bundle config set --local frozen false
           bundle install --jobs 4
-
       - name: Run unit tests
         run: bundle exec fastlane tests
 

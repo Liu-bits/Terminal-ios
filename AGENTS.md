@@ -198,6 +198,12 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
 - Unit tests live in `Sources/Terminal-iosTests` (Swift Testing) and run via
   `bundle exec fastlane tests` (`run_tests` on scheme `Terminal-ios`, simulator
   `iPhone 17`, `Terminal-iosUITests` skipped).
+- There is deliberately **no `Gemfile.lock`**. The old one pinned `BUNDLED WITH 2.1.4`
+  (which crashes on Ruby 3.3) and `fastlane 2.211.0` (whose trainer still calls
+  `xcresulttool get --format json`, removed in the Xcode 27 toolchain), so CI resolves
+  the gems fresh on every run. The trade-off is unpinned gem versions: if a run breaks
+  right after an unrelated fastlane release, suspect that first and consider re-adding a
+  lock generated against the `xcode-27` image.
 - Because the PAT has no `workflow` scope, `.github/` is excluded from the local index via
   `.git/info/exclude` and the file is **not** on GitHub yet. To publish it, add the
   `workflow` scope to the token (or upload the file through the GitHub web UI), then drop
