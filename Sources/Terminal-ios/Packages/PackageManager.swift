@@ -423,20 +423,27 @@ final class PackageManager {
     }
 
     func sourceList() -> Outcome {
-        var lines: [String] = []
-        for loaded in sources {
+        var lines = ["id               state     packages  name"]
+        for source in registry.sources.sorted(by: { $0.priority < $1.priority }) {
+            let loaded = sources.first { $0.source.id == source.id }
+            // `pending` means enabled but never refreshed: no cached manifest
+            // yet, so its packages are not visible.
+            let state: String
+            if !source.enabled {
+                state = "disabled"
+            } else if loaded == nil {
+                state = "pending"
+            } else {
+                state = "ready"
+            }
             lines.append(
-                "\(pad(loaded.source.id, 16)) \(pad(loaded.source.enabled ? "enabled" : "disabled", 9)) \(pad("\(loaded.catalog.entries.count) pkgs", 9)) \(loaded.source.name)"
+                "\(pad(source.id, 16)) \(pad(state, 9)) \(pad(loaded.map { "\($0.catalog.entries.count)" } ?? "-", 9)) \(source.name)"
             )
         }
-        let disabled = registry.sources.filter { !$0.enabled && !$0.isBundled }
-        for source in disabled {
-            lines.append("\(pad(source.id, 16)) \(pad("disabled", 9)) \(pad("-", 9)) \(source.name)")
-        }
         lines.append("")
-        lines.append("Allowed hosts: \(MirrorPolicy.allowedHosts.map(\.host).joined(separator: ", "))")
-        lines.append("Only https, allow-listed hosts, digest-verified script/wheel/wasm payloads.")
-        lines.append("Enable a mirror with `apt sources enable <id>`, then run `apt refresh`.")
+        lines.append("allowed hosts: \(MirrorPolicy.allowedHosts.map(\.host).joined(separator: ", "))")
+        lines.append("script/wheel/wasm only, https only, SHA-256 verified before use.")
+        lines.append("enable a mirror with `apt sources enable <id>`, then run `apt refresh`.")
         return .ok(lines.joined(separator: "\n"))
     }
 

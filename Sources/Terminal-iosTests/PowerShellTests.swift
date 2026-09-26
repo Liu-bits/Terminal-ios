@@ -103,7 +103,7 @@ struct PowerShellTests {
         #expect(engine.run("winget install Terminal-ios.hello").output.contains("Successfully installed"))
         #expect(engine.run("hello winget").output == "hello, winget")
         #expect(engine.run("winget install nosuch.package").exitCode == 1)
-        #expect(engine.run("winget source list").output.contains("Allowed hosts"))
+        #expect(engine.run("winget source list").output.contains("allowed hosts"))
         #expect(engine.run("winget source add evil https://evil.example.com/c.json").exitCode == 1)
         #expect(engine.run("winget uninstall Terminal-ios.hello").exitCode == 0)
         #expect(engine.run("hello").exitCode == 127)

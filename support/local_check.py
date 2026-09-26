@@ -297,7 +297,7 @@ do {
     check("winget run", "hello, world", engine.run("hello").output)
     check("winget list", "true", "\(engine.run("winget list").output.contains("Terminal-ios.hello"))")
     checkExit("winget uninstall", 0, engine.run("winget uninstall Terminal-ios.hello").exitCode)
-    check("winget source list", "true", "\(engine.run("winget source list").output.contains("Allowed hosts"))")
+    check("winget source list", "true", "\(engine.run("winget source list").output.contains("allowed hosts"))")
     checkExit("winget source list", 0, engine.run("winget source list").exitCode)
 
     // Rejected mirrors: wrong host, and a native payload kind.

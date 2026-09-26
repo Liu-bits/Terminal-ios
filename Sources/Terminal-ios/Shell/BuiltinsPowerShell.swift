@@ -176,27 +176,29 @@ enum PowerShellBuiltins {
         guard context.fileManager.fileExists(atPath: url.path, isDirectory: &isDir) else {
             return []
         }
-        let display = context.environment.displayPath(url)
         if !isDir.boolValue {
-            return [display]
+            return [context.environment.displayPath(url)]
         }
         var lines: [String] = []
-        func visit(_ directory: URL, _ displayPath: String, _ depth: Int) {
+        /// `prefix` is empty for a plain listing (just names, like the table
+        /// PowerShell prints) and grows while recursing so nested entries stay
+        /// identifiable.
+        func visit(_ directory: URL, _ prefix: String) {
             let children = (try? context.fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
             for name in children.sorted() {
                 if !force, name.hasPrefix(".") { continue }
                 if let filter, !filter.isEmpty, !matchesFilter(name, filter) { continue }
+                lines.append(prefix + name)
                 let child = directory.appendingPathComponent(name)
-                lines.append(displayPath == "~" ? "~\\\(name)" : "\(displayPath)\\\(name)")
                 var childIsDir: ObjCBool = false
                 if recurse,
                    context.fileManager.fileExists(atPath: child.path, isDirectory: &childIsDir),
                    childIsDir.boolValue {
-                    visit(child, displayPath == "~" ? "~\\\(name)" : "\(displayPath)\\\(name)", depth + 1)
+                    visit(child, prefix + name + "/")
                 }
             }
         }
-        visit(url, display, 1)
+        visit(url, "")
         return lines
     }
 
