@@ -258,6 +258,3 @@ DEPENDENCIES
   danger
   danger-swiftlint
   fastlane
-
-BUNDLED WITH
-   2.1.4
