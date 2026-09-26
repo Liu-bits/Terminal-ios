@@ -61,6 +61,15 @@ struct Catalog: Codable, Equatable {
     }
 }
 
+/// Outcome of a payload lookup: the text, or why it cannot be used.
+///
+/// A plain `Result<String, String>` would need the failure type to conform to
+/// `Error`; this tiny enum keeps the reason a readable string.
+enum PayloadLookup {
+    case success(String)
+    case failure(String)
+}
+
 /// Payload storage: bundle text first, then the literals compiled into
 /// `BundledCatalog`. Both paths verify the SHA-256 recorded in the catalog, so
 /// a tampered payload is refused instead of executed.
@@ -72,7 +81,7 @@ enum PayloadStore {
     }
 
     /// Returns the payload text for an entry, or a failure reason.
-    static func text(for entry: CatalogEntry) -> Result<String, String> {
+    static func text(for entry: CatalogEntry) -> PayloadLookup {
         guard let path = entry.payload else {
             return .failure("\(entry.name): catalog entry has no payload")
         }
