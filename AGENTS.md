@@ -175,6 +175,10 @@ Engineering rules that follow from the table:
 
 `help` prints the live table, so the count in this doc is only a sanity check:
 
+- CI runs 8 Swift Testing suites (`ShellTokenizer`, `ShellParser`, `ShellEngine`,
+  `Builtins`, `ShellScript`, `PackageManager`, `TerminalViewController`, plus the
+  placeholder UI test target) and they are green as of commit `d6af6cb`.
+
 - **files** - `ls` (`-a -l -d`) `cat` (`-n`) `mkdir` (`-p`) `rmdir` `rm` (`-r -f`)
   `cp` (`-r -f`) `mv` `touch` `stat` `ln` (`-s`) `basename` `dirname` `realpath`
   `find` (`-name -type -maxdepth`) `tree` (`-L`) `du` `df` `chmod` (octal and
@@ -302,6 +306,20 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
 ## Build and test
 
 - There is no Xcode toolchain locally (Windows), so changes are compiled by CI.
+- **But the pure-logic layer can be built and run locally** - do this before pushing,
+  it turns a 12-minute CI round trip into a 40-second loop:
+
+  ```bash
+  python support/local_check.py          # 95 scenarios, fails loudly on regressions
+  ```
+
+  It copies `Shell/` and `Packages/` into a scratch directory, stubs CryptoKit (Apple-only,
+  so the SHA-256 checks in `PayloadStore` are skipped there), compiles with the Windows
+  Swift toolchain (6.4.0 under `%LOCALAPPDATA%\Programs\Swift`) and runs a scenario list
+  covering built-ins, filters, files, scripts and package installs. Two environment
+  requirements are handled inside the script: the ambient environment carries duplicate
+  proxy variables that abort the Swift runtime, and `SDKROOT` has to point at the Windows
+  SDK. Anything UIKit (the terminal view, VoiceOver) still needs CI.
 - CI is a single workflow, `.github/workflows/Terminal-ios.yaml`, tracked in the repo
   (the `gh` token now carries the `workflow` scope; the old `.github/` exclude rule is
   gone). Its `test` job runs on every push/PR to `main`; its `build` job is
