@@ -24,6 +24,30 @@ struct CatalogEntry: Codable, Equatable {
     /// Upstream project this payload was built from (informational).
     var source: String
     var license: String
+    /// winget-style identifier, e.g. `Terminal-ios.hello`. Optional so older
+    /// manifests still decode.
+    var id: String?
+    var publisher: String?
+    var tags: [String]?
+
+    /// Identifier shown by `winget list` / `winget search`.
+    var packageID: String {
+        id ?? "\(publisher ?? "Terminal-ios").\(name)"
+    }
+
+    var tagList: [String] {
+        tags ?? []
+    }
+
+    /// Whether a search term matches this entry (name, id, summary or tags).
+    func matches(_ term: String) -> Bool {
+        let needle = term.lowercased()
+        if needle.isEmpty { return true }
+        if name.lowercased().contains(needle) { return true }
+        if packageID.lowercased().contains(needle) { return true }
+        if summary.lowercased().contains(needle) { return true }
+        return tagList.contains { $0.lowercased().contains(needle) }
+    }
 }
 
 /// The bundled catalog: the single, frozen package source.
@@ -59,16 +83,32 @@ struct Catalog: Codable, Equatable {
     func entry(providing command: String) -> CatalogEntry? {
         entries.first { $0.provides.contains(command) }
     }
+
+    /// Lookup by package name or winget id, case-insensitively.
+    func entry(identifier: String) -> CatalogEntry? {
+        entries.first {
+            $0.name.lowercased() == identifier.lowercased()
+                || $0.packageID.lowercased() == identifier.lowercased()
+        }
+    }
 }
 
-/// Outcome of a payload lookup: the text, or why it cannot be used.
+extension BundledCatalog {
+    /// The parsed bundled manifest, decoded once per process.
+    static let catalog: Catalog = Catalog.bundled()
+}
+
+/// Outcome of a lookup or a download: the value, or why it is unavailable.
 ///
-/// A plain `Result<String, String>` would need the failure type to conform to
-/// `Error`; this tiny enum keeps the reason a readable string.
-enum PayloadLookup {
-    case success(String)
+/// `Result<Value, String>` is not an option because its failure type must
+/// conform to `Error`; this keeps the reason a readable string.
+enum FetchResult<Value> {
+    case success(Value)
     case failure(String)
 }
+
+/// Payload lookups read better with their own name.
+typealias PayloadLookup = FetchResult<String>
 
 /// Payload storage: bundle text first, then the literals compiled into
 /// `BundledCatalog`. Both paths verify the SHA-256 recorded in the catalog, so

@@ -23,11 +23,47 @@ enum ShellBuiltins {
     /// The full built-in table. Later entries win, so a name is defined once.
     static let table: [String: ShellBuiltin] = {
         var result: [String: ShellBuiltin] = [:]
-        for builtin in FileBuiltins.all + TextBuiltins.all + SystemBuiltins.all {
+        let groups = FileBuiltins.all + TextBuiltins.all + SystemBuiltins.all
+            + PowerShellBuiltins.all + WingetBuiltin.all
+        for builtin in groups {
             result[builtin.name] = builtin
         }
         return result
     }()
+
+    /// Lower-cased name to built-in, so `get-childitem` and `Get-ChildItem`
+    /// both resolve the way PowerShell resolves them.
+    private static let caseInsensitiveIndex: [String: ShellBuiltin] = {
+        var result: [String: ShellBuiltin] = [:]
+        for builtin in table.values where builtin.name.contains("-") {
+            result[builtin.name.lowercased()] = builtin
+        }
+        return result
+    }()
+
+    /// PowerShell aliases (`gci`, `gc`, `sl`, ...).
+    private static let aliasIndex: [String: ShellBuiltin] = {
+        var result: [String: ShellBuiltin] = [:]
+        for (alias, target) in PowerShellBuiltins.aliases {
+            if let builtin = table[target] {
+                result[alias] = builtin
+            }
+        }
+        return result
+    }()
+
+    /// Resolves a command name: exact, then alias, then case-insensitive
+    /// (cmdlets only, which is where PowerShell's case-insensitivity applies).
+    static func lookup(_ name: String) -> ShellBuiltin? {
+        if let builtin = table[name] {
+            return builtin
+        }
+        let lowered = name.lowercased()
+        if let builtin = aliasIndex[lowered] {
+            return builtin
+        }
+        return caseInsensitiveIndex[lowered]
+    }
 
     static var names: [String] {
         table.keys.sorted()
@@ -56,6 +92,7 @@ enum ShellBuiltins {
         lines.append("Operators:  |  >  >>  <  &&  ||  ;")
         lines.append("Substitution: $(command)  `command`   Variables: $VAR ${VAR} $? $# $1")
         lines.append("Scripts: if/elif/else, for, while, until, functions, # comments")
+        lines.append("PowerShell cmdlets work too (Get-ChildItem, Select-String, ...), with aliases like gci/gc/sl")
         return lines.joined(separator: "\n")
     }
 
@@ -64,6 +101,8 @@ enum ShellBuiltins {
             ("files", FileBuiltins.all.map(\.name)),
             ("text", TextBuiltins.all.map(\.name)),
             ("system", SystemBuiltins.all.map(\.name)),
+            ("packages", WingetBuiltin.all.map(\.name)),
+            ("powershell", PowerShellBuiltins.all.map(\.name)),
             ("shell", engineCommands.map(\.name))
         ]
     }

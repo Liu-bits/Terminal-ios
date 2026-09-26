@@ -243,6 +243,107 @@ do {
     checkExit("removed script gone", 127, engine.run("sum").exitCode)
 }
 
+// --- PowerShell cmdlets ------------------------------------------------------
+do {
+    let (engine, _) = makeEngine()
+    check("Get-Location", "~", engine.run("Get-Location").output)
+    checkExit("Set-Location", 0, engine.run("Set-Location /").exitCode)
+    check("gl alias", "~", engine.run("gl").output)
+    checkExit("New-Item dir", 0, engine.run("New-Item -ItemType directory -Path ps/dir").exitCode)
+    checkExit("New-Item file", 0, engine.run("New-Item -ItemType file -Path ps/dir/a.txt").exitCode)
+    check("Test-Path true", "True", engine.run("Test-Path ps/dir/a.txt").output)
+    check("Test-Path false", "False", engine.run("Test-Path ps/nope").output)
+    checkExit("Set-Content", 0, engine.run("Set-Content -Path ps/dir/a.txt -Value alpha").exitCode)
+    check("Add-Content + Get-Content", "alpha\nbeta",
+          engine.run("Add-Content -Path ps/dir/a.txt -Value beta; Get-Content -Path ps/dir/a.txt").output)
+    check("Get-Content -Tail", "beta", engine.run("Get-Content -Path ps/dir/a.txt -Tail 1").output)
+    check("Get-Content -Head", "alpha", engine.run("Get-Content -Path ps/dir/a.txt -Head 1").output)
+    check("Get-ChildItem -Filter", "true",
+          "\(engine.run("Get-ChildItem -Path ps/dir -Filter '*.txt'").output.contains("a.txt"))")
+    check("gci alias", "true",
+          "\(engine.run("gci -Path ps/dir").output.contains("a.txt"))")
+    checkExit("Copy-Item", 0, engine.run("Copy-Item -Path ps/dir/a.txt -Destination ps/dir/b.txt").exitCode)
+    checkExit("Rename-Item", 0, engine.run("Rename-Item -Path ps/dir/b.txt -NewName c.txt").exitCode)
+    check("rename visible", "true", "\(engine.run("Get-ChildItem -Path ps/dir").output.contains("c.txt"))")
+    checkExit("Move-Item", 0, engine.run("Move-Item -Path ps/dir/c.txt -Destination ps/moved.txt").exitCode)
+    check("Select-String", "2:beta", engine.run("Get-Content -Path ps/dir/a.txt | Select-String -Pattern beta").output)
+    check("Select-String -NotMatch", "2:beta",
+          engine.run("Get-Content -Path ps/dir/a.txt | Select-String -Pattern alpha -NotMatch").output)
+    check("Measure-Object -Line", "true",
+          "\(engine.run("Get-Content -Path ps/dir/a.txt | Measure-Object -Line").output.contains("Lines          : 2"))")
+    check("Sort-Object -Descending", "beta\nalpha",
+          engine.run("Get-Content -Path ps/dir/a.txt | Sort-Object -Descending").output)
+    check("Select-Object -First", "alpha",
+          engine.run("Get-Content -Path ps/dir/a.txt | Select-Object -First 1").output)
+    check("Where-Object -Match", "beta",
+          engine.run("Get-Content -Path ps/dir/a.txt | Where-Object -Match beta").output)
+    check("Write-Output", "hello ps", engine.run("Write-Output hello ps").output)
+    checkExit("Remove-Item -Recurse", 0, engine.run("Remove-Item -Path ps -Recurse -Force").exitCode)
+    check("removed", "False", engine.run("Test-Path ps").output)
+    check("Get-Command", "true", "\(engine.run("Get-Command -Name get-childitem").output.contains("Get-ChildItem"))")
+    check("Get-Help", "true", "\(engine.run("Get-Help Select-String").output.contains("search for text"))")
+    check("case-insensitive cmdlet", "~", engine.run("get-location").output)
+    check("Get-PSDrive", "true", "\(engine.run("Get-PSDrive").output.contains("Sandbox"))")
+    checkExit("Start-Sleep", 0, engine.run("Start-Sleep -Seconds 0").exitCode)
+}
+
+// --- winget and mirrors ------------------------------------------------------
+do {
+    let (engine, root) = makeEngine()
+    check("winget version", "true", "\(engine.run("winget --version").output.hasPrefix("v"))")
+    check("winget search", "true", "\(engine.run("winget search hello").output.contains("Terminal-ios.hello"))")
+    check("winget show", "true", "\(engine.run("winget show Terminal-ios.hello").output.contains("Id: Terminal-ios.hello"))")
+    checkExit("winget install", 0, engine.run("winget install Terminal-ios.hello").exitCode)
+    check("winget run", "hello, world", engine.run("hello").output)
+    check("winget list", "true", "\(engine.run("winget list").output.contains("Terminal-ios.hello"))")
+    checkExit("winget uninstall", 0, engine.run("winget uninstall Terminal-ios.hello").exitCode)
+    check("winget source list", "true", "\(engine.run("winget source list").output.contains("Allowed hosts"))")
+    checkExit("winget source list", 0, engine.run("winget source list").exitCode)
+
+    // Rejected mirrors: wrong host, and a native payload kind.
+    checkExit("reject unknown host", 1, engine.run("apt sources add evil https://evil.example.com/catalog.json").exitCode)
+    check("reject reason", "true",
+          "\(engine.run("apt sources add evil https://evil.example.com/catalog.json").output.contains("allow-list"))")
+    checkExit("reject http", 1, engine.run("apt sources add plain http://raw.githubusercontent.com/Liu-bits/terminal-ios-catalog/main/catalog.json").exitCode)
+
+    // A stub mirror whose payload digest is computed by the same code path, so
+    // the allow-list, the digest check and the install flow all really run.
+    let payload = "echo mirror-payload\n"
+    let digest = PayloadStore.sha256Hex(payload)
+    let manifest = """
+    {"schema":1,"name":"mirror","generated":"2026-09-27","entries":[{"name":"hello-mirror","version":"1.0.0","kind":"script","summary":"from a mirror","provides":["hello-mirror"],"payload":"payloads/hello-mirror.sh","sha256":"\(digest)","source":"test","license":"MIT","id":"Terminal-ios.hello-mirror","publisher":"Terminal-ios","tags":["test"]}]}
+    """
+    let base = "https://raw.githubusercontent.com/Liu-bits/terminal-ios-catalog/main/"
+    let transport = StubTransport()
+    transport.put(base + "catalog.json", manifest)
+    transport.put(base + "payloads/hello-mirror.sh", payload)
+    ManifestTransportFactory.shared = transport
+
+    checkExit("enable mirror", 0, engine.run("apt sources enable mirror-primary").exitCode)
+    check("refresh", "true", "\(engine.run("apt refresh").output.contains("Get: mirror-primary"))")
+    check("mirror visible", "true", "\(engine.run("apt search hello-mirror").output.contains("mirror-primary"))")
+    checkExit("install from mirror", 0, engine.run("apt install hello-mirror").exitCode)
+    check("mirror script runs", "mirror-payload", engine.run("hello-mirror").output)
+    checkExit("disable mirror", 0, engine.run("apt sources disable mirror-primary").exitCode)
+    checkExit("remove mirror", 0, engine.run("apt sources remove mirror-primary").exitCode)
+
+    // A mirror entry that claims to be a native binary must be refused.
+    let badManifest = """
+    {"schema":1,"name":"bad","generated":"2026-09-27","entries":[{"name":"evilbin","version":"1.0.0","kind":"native","summary":"native","provides":["evilbin"],"payload":"payloads/evil","sha256":"\(digest)","source":"test","license":"MIT"}]}
+    """
+    let bad = StubTransport()
+    bad.put(base + "catalog.json", badManifest)
+    bad.put(base + "payloads/evil", payload)
+    ManifestTransportFactory.shared = bad
+    _ = engine.run("apt sources enable mirror-primary")
+    check("bad mirror lists ok", "true", "\(engine.run("apt refresh").output.contains("Refreshed"))")
+    checkExit("refuse native payload", 1, engine.run("apt install evilbin").exitCode)
+    check("refusal reason", "true", "\(engine.run("apt install evilbin").output.contains("script/wheel/wasm"))")
+    _ = engine.run("apt sources disable mirror-primary")
+    ManifestTransportFactory.shared = nil
+    _ = root
+}
+
 print("")
 print("checks: \(checks), failures: \(failures)")
 exit(failures == 0 ? 0 : 1)
@@ -250,9 +351,17 @@ exit(failures == 0 ? 0 : 1)
 
 
 def gather_sources() -> list[pathlib.Path]:
+    """Pure-logic sources, minus the one file that needs platform networking.
+
+    `URLSessionTransport.swift` is the only piece that talks to URLSession; the
+    policy it enforces lives in MirrorPolicy, which is covered here.
+    """
+    skip = {"URLSessionTransport.swift"}
     files: list[pathlib.Path] = []
     for sub in ("Shell", "Packages"):
-        files.extend(sorted((ROOT / "Sources" / "Terminal-ios" / sub).glob("*.swift")))
+        files.extend(
+            sorted(p for p in (ROOT / "Sources" / "Terminal-ios" / sub).glob("*.swift") if p.name not in skip)
+        )
     return files
 
 

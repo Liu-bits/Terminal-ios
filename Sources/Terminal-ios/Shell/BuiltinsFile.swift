@@ -31,6 +31,25 @@ enum FileBuiltins {
         ShellBuiltin("mktemp", "create a temporary file", mktemp)
     ]
 
+    // MARK: - Cross-command reuse
+
+    /// Runs one of the file commands by name.
+    ///
+    /// The PowerShell cmdlets (`Remove-Item`, `Copy-Item`, ...) are thin
+    /// parameter adapters over exactly these implementations, so their
+    /// behaviour cannot drift from the POSIX commands.
+    static func run(_ name: String, _ args: [String], _ context: ShellRunContext) -> ShellResult {
+        switch name {
+        case "ls": return ls(args, context)
+        case "cat": return cat(args, context)
+        case "rm": return rm(args, context)
+        case "cp": return cp(args, context)
+        case "mv": return mv(args, context)
+        case "mkdir": return mkdir(args, context)
+        default: return .fail("\(name): not available for reuse")
+        }
+    }
+
     // MARK: - ls
 
     /// Permissions string such as `drwxr-xr-x`.

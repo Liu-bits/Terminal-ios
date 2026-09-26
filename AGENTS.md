@@ -79,19 +79,26 @@ code, no native code, no JIT - and none of them download Mach-O executables.
 
 Engineering rules that follow from the table:
 
-1. One pinned source. Default is the bundled catalog; a remote manifest may be
-   added later, but only at a single HTTPS host with a fixed path prefix, and
-   only over TLS with certificate validation (optionally SPKI pinning).
-2. Manifest model is shared by both sources: name, version, kind, provides,
-   payload, sha256, source, license. A remote manifest is just another
-   `Catalog` instance - the installer code is the same.
-3. `kind` decides the execution path: `script` -> our shell, `wheel` -> bundled
-   Python, `wasm` -> bundled WASM engine, `runtime`/`toolchain` -> a bundle of
-   the above. Anything else must be refused with a clear error.
-4. Size and quota: cap per-payload size, cache in the sandbox, and surface total
-   usage so the IPA/container budget stays visible.
-5. Tests must never require the network: the fetcher gets a seam (injected
-   transport) and unit tests use a fake, exactly like the bundled catalog path.
+1. One pinned source by default, mirrors only on request. The bundled catalog is
+   always on; mirrors ship **disabled** and are listed in `MirrorPolicy`. They
+   can only be enabled by the user (`apt sources enable <id>` / `winget source
+   enable`), and nothing is fetched until an explicit `apt refresh`.
+2. The mirror allow-list is compiled into the binary: host **and** path prefix
+   must match (`MirrorPolicy.allowedHosts`), the scheme must be `https`, and a
+   source the user types in is validated before it is stored. Adding a mirror
+   means shipping a build, not editing a config file.
+3. Three mirrors ship for the same catalog (jsDelivr, GitHub raw, project
+   pages) so a blocked host has a fallback, in priority order.
+4. Manifest model is shared by both sources: name, version, kind, provides,
+   payload, sha256, source, license, plus winget's id/publisher/tags. Remote
+   entries **must** carry a 64-hex SHA-256 and a `script`/`wheel`/`wasm` kind -
+   `MirrorPolicy.validate` refuses anything else before a byte is downloaded.
+5. Downloads are size-capped (2 MB manifests, 32 MB payloads), cached under
+   `<sandbox>/.packages/cache`, and every payload is digest-verified again
+   before it is written - a mismatch is discarded, never executed.
+6. Tests never require the network: `ManifestTransport` is injected
+   (`ManifestTransportFactory.shared`), and the tests use `StubTransport`.
+   `URLSessionTransport` is the only file that touches URLSession.
 
 ### Architecture phases
 
@@ -150,8 +157,16 @@ Engineering rules that follow from the table:
   - `Sources/Terminal-ios/Packages/` - the package layer:
     - `Catalog` - manifest model plus `PayloadStore`, which verifies every
       payload's SHA-256 before it is used
-    - `PackageManager` - install/remove/list/search/show/update/sources over a
-      `Catalog`, writing shims under `<sandbox>/.packages/bin`
+    - `SourcePolicy` - `CatalogSource`, the compiled-in mirror allow-list
+      (`MirrorPolicy`), and `SourceRegistry` (which sources exist and which are
+      enabled)
+    - `ManifestFetcher` - `ManifestTransport` protocol, `StubTransport` for
+      tests, `ManifestTransportFactory`, and `CatalogFetcher` which applies the
+      policy to manifests and payloads
+    - `URLSessionTransport.swift` - the only file that uses URLSession; excluded
+      from the local check runner
+    - `PackageManager` - install/remove/list/search/show/update/refresh/sources
+      over every enabled source, in priority order
     - `BundledCatalog.swift` - **generated** by `support/generate_catalog.py`
   - `Sources/Terminal-ios/History/` - Time Machine snapshot store: local SQLite
     (command + argv, cwd, env, full stdout/stderr, exit code, duration),
@@ -191,26 +206,42 @@ Engineering rules that follow from the table:
   `date` (+strftime subset) `uptime` `sleep` `tty` `ps` `kill` `free`
   `env` `printenv` `unset` `set` `export` `read` `true` `false` `test` `[`
   `expr` `eval` `sh` `source` `.` `which` `type` `command` `help` `man` `version`
-- **packages** - `apt` `apt-get` `apk` `pip` `pip3`; runtimes declared in the
+- **packages** - `apt` `apt-get` `apk` `pip` `pip3` `winget`; runtimes declared in the
   catalog: `python3` `python` `py` `gcc` `cc` `clang` `make`
+- **powershell** - `Get-Location` `Set-Location` `Get-ChildItem` `Get-Item`
+  `Get-Content` `Set-Content` `Add-Content` `New-Item` `Remove-Item` `Copy-Item`
+  `Move-Item` `Rename-Item` `Test-Path` `Get-PSDrive` `Get-Process` `Get-Command`
+  `Get-Help` `Select-String` `Measure-Object` `Sort-Object` `Select-Object`
+  `Where-Object` `Write-Output` `Write-Host` `Clear-Host` `Get-Date`
+  `Start-Sleep`, with the usual aliases (`gci`, `gc`, `gl`, `sl`, `ni`, `ri`,
+  `ci`, `mi`, `rn`, `sc`, `ac`, `gps`, `cls`). Cmdlets are case-insensitive and
+  take PowerShell-style parameters (`-Path`, `-Recurse`, `-Filter`, `-Value`);
+  `PSArgs` parses those, `ShellArgs` handles POSIX ones.
 - **engine commands** - `cd` `pwd` `clear` `history` `exit`
 
 ### Offline catalog and package managers
 
 - `catalog/catalog.json` is the only package source compiled into the app; the
   generator writes each payload's SHA-256 back into it, so the manifest is
-  self-describing and reviewable.
+  self-describing and reviewable. Entries also carry winget metadata (`id`,
+  `publisher`, `tags`) so `winget search`/`show`/`list` have proper identifiers.
 - `support/generate_catalog.py` embeds the manifest **and** every payload as
   Swift string literals (`BundledCatalog.swift`). Embedding beats bundle
   resources here: the unit tests run without an app bundle, and nothing depends
   on how Xcode treats `.sh`/`.json` files.
-- Install flow: resolve entry -> `PayloadStore.text(for:)` (digest check) ->
-  materialise under `<sandbox>/.packages/prefix` -> write a shim per provided
-  command under `<sandbox>/.packages/bin` -> record the name in
-  `<sandbox>/.packages/installed.json`.
-- `apt list` shows `ii`/`un` marks, `apt show` prints the digest and license,
-  `apt update` re-verifies what is installed, `apt sources` prints the catalog
-  identity. `apk` maps `add`/`del`/`info` onto the same operations.
+- Install flow: resolve entry across sources -> fetch (remote) or read the
+  embedded payload (bundled) -> digest check -> materialise under
+  `<sandbox>/.packages/prefix` -> write a shim per provided command under
+  `<sandbox>/.packages/bin` -> record the name in
+  `<sandbox>/.packages/installed.json`. `PackageManager.script(for:)` reads the
+  payload back from the prefix, so bundled and mirror packages behave the same
+  at run time.
+- `apt list` shows `ii`/`un` marks with the source column, `apt show` prints the
+  id, source, digest and license, `apt update` re-verifies installed payloads,
+  `apt refresh` fetches the enabled mirrors' manifests, `apt sources
+  list|enable|disable|add|remove` manages them. `apk` maps `add`/`del`/`info`
+  onto the same operations. `winget` adds `search`/`show`/`install`/
+  `uninstall`/`list`/`upgrade`/`source ...` on top.
 - Entries with `"payload": null` (today `python-runtime`, `mingw-toolchain`) are
   *declared* runtimes: `apt install` reports that the payload is not bundled
   instead of pretending, and the shims say the same. Add `payload` + `sha256`
@@ -393,9 +424,9 @@ only consumes artifacts produced by CI:
 
 | Phase | Scope | Status |
 | ----- | ----- | ------ |
-| 0 | Shell core + command surface + terminal UI | Shell done (~120 commands, scripts); UI gaps open (ANSI colors, view split) |
+| 0 | Shell core + command surface + terminal UI | Shell done (~150 commands incl. cmdlets); UI gaps open (ANSI colors, view split) |
 | 1 | Time Machine history (SQLite) | Not started - `Sources/Terminal-ios/History/` does not exist |
-| 2 | Runtimes + package catalogs | Catalog + `apt`/`apk`/`pip` + digest verification landed; WASM engine, CPython payload, MinGW toolchain, remote fetcher still to build |
+| 2 | Runtimes + package catalogs | Catalog, mirrors, `apt`/`apk`/`pip`/`winget`, digest verification landed; WASM engine + CPython/MinGW payloads still to build |
 | 3 | Release hardening | Not started |
 
 ### What actually exists

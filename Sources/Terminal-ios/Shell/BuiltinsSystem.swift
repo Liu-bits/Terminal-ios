@@ -458,7 +458,7 @@ enum SystemBuiltins {
         var output: [String] = []
         var missing = false
         for name in parsed.operands {
-            if let builtin = ShellBuiltins.table[name] {
+            if let builtin = ShellBuiltins.lookup(name) {
                 output.append("\(name) is a shell built-in (\(builtin.summary))")
             } else if let resolved = context.commandResolver?(name) {
                 output.append("\(name) is \(resolved)")
@@ -476,7 +476,7 @@ enum SystemBuiltins {
             guard let name = parsed.operands.first else {
                 return .fail("command: usage: command -v name", code: 2)
             }
-            if let builtin = ShellBuiltins.table[name] {
+            if let builtin = ShellBuiltins.lookup(name) {
                 return .ok(builtin.name)
             }
             if let resolved = context.commandResolver?(name) {
@@ -498,7 +498,7 @@ enum SystemBuiltins {
         guard let name = args.first else {
             return .fail("What manual page do you want?", code: 2)
         }
-        guard let builtin = ShellBuiltins.table[name] else {
+        guard let builtin = ShellBuiltins.lookup(name) else {
             return .fail("No manual entry for \(name)")
         }
         return .ok("\(builtin.name) - \(builtin.summary)")
@@ -519,13 +519,13 @@ enum SystemBuiltins {
         let manager = context.packages()
         // Alpine spells the same operations `apk add` / `apk del` / `apk info`.
         if parsed.operands.first == "add" {
-            return describe(manager.install(Array(parsed.operands.dropFirst())), prefix: "apk")
+            return toResult(manager.install(Array(parsed.operands.dropFirst()), transport: transport()))
         }
         if parsed.operands.first == "del" {
-            return describe(manager.remove(Array(parsed.operands.dropFirst())), prefix: "apk")
+            return toResult(manager.remove(Array(parsed.operands.dropFirst())))
         }
         if parsed.operands.first == "info" {
-            return describe(manager.list(pattern: parsed.operands.count > 1 ? parsed.operands[1] : nil), prefix: "apk")
+            return toResult(manager.list(pattern: parsed.operands.count > 1 ? parsed.operands[1] : nil))
         }
         return packageCommand(args, context, label: "apk", supportsSearch: true)
     }
@@ -545,38 +545,80 @@ enum SystemBuiltins {
         let parsed = ShellArgs.parse(args)
         guard let subcommand = parsed.operands.first else {
             return .ok("""
-            \(label): offline package manager
-            usage: \(label) install|remove|list|search|show|update|sources [name ...]
-            source: \(manager.catalog.name) (bundled, \(manager.catalog.entries.count) packages)
+            \(label): package manager over \(manager.sources.count) source(s)
+            usage: \(label) install|remove|list|search|show|update|upgrade|sources|refresh [name ...]
+            bundled catalog: \(manager.catalog.entries.count) packages
+            enable a mirror with `\(label) sources enable <id>`, then `\(label) refresh`
             """)
         }
         let rest = Array(parsed.operands.dropFirst())
         switch subcommand {
         case "install", "add", "get":
-            return describe(manager.install(rest), prefix: label)
+            return toResult(manager.install(rest, transport: SystemBuiltins.transport()))
         case "remove", "rm", "uninstall", "delete", "del":
-            return describe(manager.remove(rest), prefix: label)
+            return toResult(manager.remove(rest))
         case "list", "ls":
-            return describe(manager.list(pattern: rest.first), prefix: label)
+            return toResult(manager.list(pattern: rest.first))
         case "search":
             return supportsSearch
-                ? describe(manager.search(rest), prefix: label)
+                ? toResult(manager.search(rest))
                 : .fail("\(label): search is not supported")
         case "show", "info":
-            return describe(manager.info(rest), prefix: label)
+            return toResult(manager.info(rest))
         case "update":
-            return describe(manager.update(), prefix: label)
+            return toResult(manager.update(transport: transport()))
         case "upgrade":
-            return describe(manager.upgrade(), prefix: label)
+            return toResult(manager.upgrade())
+        case "refresh":
+            guard let transport = transport() else {
+                return .fail("\(label): no network transport in this environment")
+            }
+            return toResult(manager.refresh(transport: transport))
         case "sources":
-            return describe(manager.sources(), prefix: label)
+            return sourceCommand(rest, manager: manager, label: label)
         default:
             return .fail("\(label): unknown subcommand '\(subcommand)'", code: 2)
         }
     }
 
-    private static func describe(_ outcome: PackageManager.Outcome, prefix: String) -> ShellResult {
+    /// `apt sources [list|enable|disable|add|remove]` - the mirror controls.
+    private static func sourceCommand(
+        _ rest: [String],
+        manager: PackageManager,
+        label: String
+    ) -> ShellResult {
+        let verb = rest.first?.lowercased() ?? "list"
+        let operands = Array(rest.dropFirst())
+        switch verb {
+        case "list", "ls":
+            return toResult(manager.sourceList())
+        case "enable", "disable":
+            guard let id = operands.first else {
+                return .fail("\(label): sources \(verb) needs a source id", code: 2)
+            }
+            return toResult(manager.sourceSetEnabled(id: id, enabled: verb == "enable"))
+        case "add":
+            guard operands.count >= 2 else {
+                return .fail("\(label): sources add needs <id> <url>", code: 2)
+            }
+            return toResult(manager.sourceAdd(id: operands[0], name: operands[0], urlString: operands[1]))
+        case "remove", "rm":
+            guard let id = operands.first else {
+                return .fail("\(label): sources remove needs a source id", code: 2)
+            }
+            return toResult(manager.sourceRemove(id: id))
+        default:
+            return .fail("\(label): unknown sources verb '\(verb)'", code: 2)
+        }
+    }
+
+    private static func toResult(_ outcome: PackageManager.Outcome) -> ShellResult {
         ShellResult(output: outcome.text, exitCode: outcome.exitCode, clearScreen: false)
+    }
+
+    /// The transport the app installed; nil in tests and the local check runner.
+    static func transport() -> ManifestTransport? {
+        ManifestTransportFactory.shared
     }
 
     // MARK: - Runtimes from the catalog
@@ -585,31 +627,31 @@ enum SystemBuiltins {
     /// explains exactly what to install.
     private static func python(_ args: [String], _ context: ShellRunContext) -> ShellResult {
         let manager = context.packages()
-        guard let entry = manager.catalog.entry(providing: "python3") else {
-            return .fail("python3: no runtime in \(manager.catalog.name). Add a `python` entry to the catalog.")
+        guard let match = manager.resolve(command: "python3") else {
+            return .fail("python3: no runtime in any configured source (\(manager.sources.map(\.source.id).joined(separator: ", ")))")
         }
-        guard entry.payload != nil else {
-            return .fail("python3: \(entry.name) \(entry.version) is declared in the catalog, but its WASM payload is not bundled in this build yet.")
+        guard match.entry.payload != nil else {
+            return .fail("python3: \(match.entry.name) \(match.entry.version) is declared in \(match.source.id), but its WASM payload is not bundled in this build yet.")
         }
-        guard manager.isInstalled(entry.name) else {
-            return .fail("python3: runtime \(entry.name) \(entry.version) is not installed. Run: apt install \(entry.name)")
+        guard manager.isInstalled(match.entry.name) else {
+            return .fail("python3: runtime \(match.entry.name) \(match.entry.version) is not installed. Run: apt install \(match.entry.name)")
         }
-        return .fail("python3: \(entry.name) is installed, but the WASM runtime is not wired up yet.")
+        return .fail("python3: \(match.entry.name) is installed, but the WASM runtime is not wired up yet.")
     }
 
     private static func toolchain(_ args: [String], _ context: ShellRunContext) -> ShellResult {
         let command = args.first ?? "cc"
         let manager = context.packages()
-        guard let entry = manager.catalog.entry(providing: "gcc") ?? manager.catalog.entry(providing: command) else {
-            return .fail("\(command): no toolchain in \(manager.catalog.name). MinGW builds are shipped as WASM payloads.")
+        guard let match = manager.resolve(command: "gcc") ?? manager.resolve(command: command) else {
+            return .fail("\(command): no toolchain in any configured source. MinGW builds are shipped as WASM payloads.")
         }
-        guard entry.payload != nil else {
-            return .fail("\(command): \(entry.name) \(entry.version) is declared in the catalog, but its WASM payload is not bundled in this build yet.")
+        guard match.entry.payload != nil else {
+            return .fail("\(command): \(match.entry.name) \(match.entry.version) is declared in \(match.source.id), but its WASM payload is not bundled in this build yet.")
         }
-        guard manager.isInstalled(entry.name) else {
-            return .fail("\(command): toolchain \(entry.name) \(entry.version) is not installed. Run: apt install \(entry.name)")
+        guard manager.isInstalled(match.entry.name) else {
+            return .fail("\(command): toolchain \(match.entry.name) \(match.entry.version) is not installed. Run: apt install \(match.entry.name)")
         }
-        return .fail("\(command): \(entry.name) is installed, but the WASM runtime is not wired up yet.")
+        return .fail("\(command): \(match.entry.name) is installed, but the WASM runtime is not wired up yet.")
     }
 }
 

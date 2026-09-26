@@ -10,6 +10,10 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         _: UIApplication,
         didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Installs the one component that touches the network. It is set here
+        // rather than created inside the shell so tests and the local check
+        // runner stay offline (they inject a stub, or nothing at all).
+        ManifestTransportFactory.shared = URLSessionTransport()
         return true
     }
 }

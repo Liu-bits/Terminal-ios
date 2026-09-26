@@ -413,7 +413,7 @@ final class ShellEngine {
         }
 
         let context = makeContext(stdin: input)
-        if let builtin = ShellBuiltins.table[name] {
+        if let builtin = ShellBuiltins.lookup(name) {
             let result = builtin.run(args, context)
             // Built-ins may mutate variables (`export`, `unset`, `read`).
             session.environment = context.environment

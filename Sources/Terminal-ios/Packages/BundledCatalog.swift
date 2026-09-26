@@ -26,7 +26,14 @@ enum BundledCatalog {
           "payload": "payloads/hello.sh",
           "sha256": "8d6a9ad9b20bdf837fb377e7005a8dcdb92bfbc8c07329b6e536105b0a91b621",
           "source": "Terminal-ios",
-          "license": "MIT"
+          "license": "MIT",
+          "id": "Terminal-ios.hello",
+          "publisher": "Terminal-ios",
+          "tags": [
+            "demo",
+            "script",
+            "greeting"
+          ]
         },
         {
           "name": "sysinfo",
@@ -39,7 +46,14 @@ enum BundledCatalog {
           "payload": "payloads/sysinfo.sh",
           "sha256": "4b00985c7947307986dbdda52c8602153da12b1d9f9899e2d0d21a39bf040ea4",
           "source": "Terminal-ios",
-          "license": "MIT"
+          "license": "MIT",
+          "id": "Terminal-ios.sysinfo",
+          "publisher": "Terminal-ios",
+          "tags": [
+            "system",
+            "diagnostics",
+            "script"
+          ]
         },
         {
           "name": "mkproject",
@@ -52,7 +66,14 @@ enum BundledCatalog {
           "payload": "payloads/mkproject.sh",
           "sha256": "3ff37e9e4667f950fb182da49614b99710ccc29399fc04851d5cc00966fb86ce",
           "source": "Terminal-ios",
-          "license": "MIT"
+          "license": "MIT",
+          "id": "Terminal-ios.mkproject",
+          "publisher": "Terminal-ios",
+          "tags": [
+            "scaffold",
+            "script",
+            "project"
+          ]
         },
         {
           "name": "backup",
@@ -65,7 +86,14 @@ enum BundledCatalog {
           "payload": "payloads/backup.sh",
           "sha256": "29c39a0f9fc84fbc7213b1c587bcd489d30ed6af59ca216819aade41bf05192c",
           "source": "Terminal-ios",
-          "license": "MIT"
+          "license": "MIT",
+          "id": "Terminal-ios.backup",
+          "publisher": "Terminal-ios",
+          "tags": [
+            "backup",
+            "script",
+            "files"
+          ]
         },
         {
           "name": "sum",
@@ -78,7 +106,14 @@ enum BundledCatalog {
           "payload": "payloads/sum.sh",
           "sha256": "da2fffc2974a2e1c0d67cb8f12aca4fd34a00afdafb7fc33ba3b3c8dfe9bd7ec",
           "source": "Terminal-ios",
-          "license": "MIT"
+          "license": "MIT",
+          "id": "Terminal-ios.sum",
+          "publisher": "Terminal-ios",
+          "tags": [
+            "text",
+            "math",
+            "script"
+          ]
         },
         {
           "name": "python-runtime",
@@ -95,7 +130,14 @@ enum BundledCatalog {
           "payload": null,
           "sha256": null,
           "source": "python/cpython (wasm32-wasi build)",
-          "license": "PSF-2.0"
+          "license": "PSF-2.0",
+          "id": "Terminal-ios.Python",
+          "publisher": "Terminal-ios",
+          "tags": [
+            "runtime",
+            "python",
+            "wasm"
+          ]
         },
         {
           "name": "mingw-toolchain",
@@ -111,7 +153,15 @@ enum BundledCatalog {
           "payload": null,
           "sha256": null,
           "source": "mingw-w64 / llvm (wasm32-wasi build)",
-          "license": "GPL-3.0-or-later"
+          "license": "GPL-3.0-or-later",
+          "id": "Terminal-ios.MinGW",
+          "publisher": "Terminal-ios",
+          "tags": [
+            "toolchain",
+            "compiler",
+            "wasm",
+            "mingw"
+          ]
         }
       ]
     }
