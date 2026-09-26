@@ -1,0 +1,7 @@
+.DS_Store
+/fastlane/report.xml
+/fastlane/test_output
+Sources/Carthage
+Sources/Terminal-ios.xcodeproj/project.xcworkspace/xcuserdata/
+Sources/Terminal-ios.xcodeproj/xcuserdata/
+Sources/Terminal-ios.xcodeproj/project.xcworkspace/xcshareddata/

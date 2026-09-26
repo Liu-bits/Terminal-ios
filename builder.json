@@ -1,0 +1,18 @@
+{
+  "project": "Terminal-ios",
+  "platform": "ios",
+  "github": {
+    "owner": "Liu-bits",
+    "repo": "Terminal-ios"
+  },
+  "provider": "github",
+  "codemagic": {},
+  "bitrise": {},
+  "ios": {},
+  "flutter": {
+    "watch": {}
+  },
+  "reactNative": {},
+  "kmp": {},
+  "mobai": {}
+}
