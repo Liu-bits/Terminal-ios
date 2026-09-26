@@ -139,44 +139,56 @@ Sources/
 
 ### Pushing from this machine
 
-`github.com:443` is not reachable directly here, and the global `~/.gitconfig` rewrites
-every `https://` remote to the read-only `gitclone.com` mirror (a plain `git push` then
-fails with HTTP 502). Push over the local proxy while bypassing the rewrite:
+`git push` over HTTPS does **not** work from this machine. Observed on 2026-09-26, all
+three ways fail:
 
-```powershell
-$env:GIT_TERMINAL_PROMPT = '0'
-$empty = Join-Path $env:TEMP 'empty-gitconfig'; Set-Content -Path $empty -Value '' -NoNewline
-$env:GIT_CONFIG_GLOBAL = $empty
-git -c credential.helper=manager -c http.proxy=http://127.0.0.1:18081 -c https.proxy=http://127.0.0.1:18081 push origin main
-Remove-Item Env:\GIT_CONFIG_GLOBAL; Remove-Item $empty -Force
-```
+- direct `https://github.com` : `Failed to connect to github.com:443` (blocked);
+- through the local proxy `127.0.0.1:18081` with the default schannel backend: the
+  connection stalls right after `schannel: renegotiating SSL/TLS connection`, forever;
+- same proxy with `-c http.sslBackend=openssl`: handshake succeeds but the upload dies
+  with `send-pack: unexpected disconnect while reading sideband packet`.
 
-Always verify the result, for example:
+The global `~/.gitconfig` additionally rewrites every `https://` remote to the read-only
+`gitclone.com` mirror, so a plain `git push` fails with HTTP 502 before it even starts.
+Beware: `env -u http_proxy ... <cmd>` is silently swallowed in this sandbox (no output,
+exit 0, command never runs) - override with `http_proxy= https_proxy= <cmd>` instead.
 
-```powershell
-git -c credential.helper=manager -c http.proxy=http://127.0.0.1:18081 ls-remote origin refs/heads/main
-```
+**Working method: write the commit through the GitHub Git Data API.** `gh` is
+authenticated (`Liu-bits`, token scopes `repo`, `write:org`) and its API path is
+reachable, so push a tree without any git transport:
 
-The proxy `127.0.0.1:18081` and the cached GitHub credential for `Liu-bits` belong to
-this machine; adjust them if the environment changes.
+1. `gh api --method POST repos/Liu-bits/Terminal-ios/git/blobs` per file
+   (`{"content": base64, "encoding": "base64"}`, taken from `git cat-file blob <sha>`);
+2. `.../git/trees` with those blob entries (`mode` `100644` or `100755`);
+3. `.../git/commits` with `tree`, `parents`, and explicit `author` / `committer`
+   (`name`, `email`, `date`);
+4. `gh api --method PATCH repos/Liu-bits/Terminal-ios/git/refs/heads/main -f sha=<commit> -F force=true`.
+
+To keep local and remote identical (so later `git push` is a plain fast-forward), pass the
+**exact** author/committer name, email and ISO-8601 date to step 3 and reproduce the same
+commit locally with `git commit-tree <tree>` under matching `GIT_AUTHOR_*` /
+`GIT_COMMITTER_*` environment variables: identical metadata + tree + parents yields an
+identical SHA. Commit `049c6fca` was created that way, so `main` and `origin/main` match.
+
+Push with `git push` anyway if the network is fixed; the API route is the fallback, not a
+preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/main`.
 
 ## Build and test
 
 - There is no Xcode toolchain locally (Windows), so changes are compiled by CI.
-- Builds run through the `iOS Build` workflow (`.github/workflows/ios-build.yml`,
-  `workflow_dispatch`, runner label `xcode-27`) and produce an unsigned `ipa` artifact.
-  Keep `snapshot_ref` empty and build the `main` branch.
-- Unit tests live in `Sources/Terminal-iosTests` (Swift Testing) and are run by CI via
-  `bundle exec fastlane tests` (`.github/workflows/test.yml`, triggered on push).
-- The `Test` workflow is currently red for an unrelated reason: the job installs bundler
-  but never runs `bundle install`, so `bundle exec fastlane tests` fails within a second.
-  Check which step failed before assuming the code is broken.
-- TODO: `iOS Build` does not verify the IPA it produced. Checking the built `Info.plist`
-  for `UIApplicationSceneManifest` (and printing the built commit) would catch stale or
-  wrong-branch builds before they reach the phone.
-- Build versioning: `CFBundleShortVersionString` and `CFBundleVersion` in `Sources/Terminal-ios/Info.plist`
-  are configured as `$(MARKETING_VERSION)` and `$(CURRENT_PROJECT_VERSION)` so build numbers can
-  be injected during CI build.
+- CI is a single workflow: `.github/workflows/Terminal-ios.yaml`. Its `test` job runs on
+  every push/PR to `main`; its `build` job is `workflow_dispatch`-only on runner label
+  `xcode-27` and produces an unsigned `ipa` artifact (`Terminal-ios-unsigned-ipa`).
+  The build job verifies the built `Info.plist` keeps `UIApplicationSceneManifest` and
+  prints the built commit - a stale or wrong-branch build is the most common reason a fix
+  looks like it did not work, so always check the run's `head_sha`.
+- Unit tests live in `Sources/Terminal-iosTests` (Swift Testing) and run via
+  `bundle exec fastlane tests` (`run_tests` on scheme `Terminal-ios`, simulator
+  `iPhone 17`, `Terminal-iosUITests` skipped).
+- Because the PAT has no `workflow` scope, `.github/` is excluded from the local index via
+  `.git/info/exclude` and the file is **not** on GitHub yet. To publish it, add the
+  `workflow` scope to the token (or upload the file through the GitHub web UI), then drop
+  the `.github/` line from `.git/info/exclude`.
 
 ## Test device: iPhone 13 on iOS 27.0
 
@@ -203,111 +215,23 @@ only consumes artifacts produced by CI:
 - The Xcode project keeps the upstream author's `DEVELOPMENT_TEAM` (`S6EJ3ZVM4G`); CI
   builds are unsigned, so signing for the phone happens in the sideload tool.
 
-## CI workflows (stored outside the repo)
+## CI workflow (`.github/workflows/Terminal-ios.yaml`)
 
-- GitHub Actions workflows are intentionally **not** in this working tree: no
-  `.github/` directory exists here. The minimal recipes below are the canonical
-  description of the CI.
-- The full originals (`ios-build.yml`, `test.yml`, `ios-share.yml`) remain
-  retrievable from git history, e.g. `git show HEAD:.github/workflows/test.yml`.
-  The working-tree deletions are hidden from git with
-  `git update-index --assume-unchanged` so they are never committed or pushed.
-  Verify with `git ls-files -v | Select-String '^h'`.
-- To restore CI: recreate `.github/workflows/` from the recipes below (or from
-  git history), then run `git update-index --no-assume-unchanged` on the three
-  workflow files.
-
-### Minimal workflow recipes
-
-All runners use label `xcode-27` with Xcode pinned to 27.0 via
-`maxim-lobanov/setup-xcode@v1`. There is no Xcode locally (Windows), so these
-are the only compile/test path.
-
-#### test.yml - unit tests on push / PR
-
-```yaml
-name: Test
-
-on: [push, pull_request]
-
-jobs:
-  job-test:
-    name: Run unit tests (Xcode 27)
-    runs-on: xcode-27
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Select Xcode 27
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '27.0'
-
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.3'
-
-      - name: Install needed software
-        run: |
-          gem install xcpretty -N
-          gem install bundler -N
-
-      - name: Run unit tests
-        run: bundle exec fastlane tests
-```
-
-`fastlane tests` runs `run_tests` on scheme `Terminal-ios`, device `iPhone 17`,
-skipping `Terminal-iosUITests` (see `fastlane/Fastfile`).
-
-#### ios-build.yml - unsigned IPA via workflow_dispatch
-
-Manually triggered (`workflow_dispatch`, 30-minute timeout). Key inputs:
-`build_id` (required), `snapshot_ref` (empty = build this branch),
-`ios_path` (default `.`), `scheme` (auto-detected if empty), `use_signing`
-(default `false`), `configuration` (default `Debug`). Flutter/Node/JDK/Gradle
-setup steps only activate for non-native projects.
-
-Native unsigned path (this repo): find `.xcodeproj`, derive the scheme from it
-when empty, then:
-
-```bash
-xcodebuild -project <project> -scheme '<scheme>' \
-  -configuration '<Debug|Release>' \
-  -destination 'generic/platform=iOS' \
-  -derivedDataPath '<DerivedData>' \
-  COMPILER_INDEX_STORE_ENABLE=NO \
-  DEBUG_INFORMATION_FORMAT=dwarf \
-  ONLY_ACTIVE_ARCH=YES -quiet \
-  SWIFT_ENABLE_COMPILE_CACHE=YES CLANG_ENABLE_COMPILE_CACHE=YES \
-  CODE_SIGNING_ALLOWED=NO build
-```
-
-Then locate the `.app` via `xcodebuild -showBuildSettings -json` (fallback:
-first `*.app` under `DerivedData/Build/Products/<config>-iphoneos`), copy it to
-`build/Payload/`, `zip -rq "<build_id>.ipa" Payload`, and upload
-`build/*.ipa` with `actions/upload-artifact@v7` (retention 7 days). Signing
-steps (`Install certificate and provisioning profile`, archive + export with a
-generated `ExportOptions.plist`, keychain cleanup) only run when
-`use_signing: true`. DerivedData is cached per `github.run_id`.
-
-#### ios-share.yml - simulator build shared to the MobAI app
-
-Manually triggered (`workflow_dispatch`, 90-minute timeout). Same
-`build_id`/`snapshot_ref`/`ios_path`/`scheme` inputs plus `duration`
-(default `30m`). Boots a simulator via `MobAI-App/mobai-ci@v1`
-(`$MOBAI_SIM_UDID`), builds Debug unsigned for that simulator:
-
-```bash
-xcodebuild <target> -scheme "<scheme>" -configuration Debug \
-  -destination "id=$MOBAI_SIM_UDID" \
-  -derivedDataPath "$GITHUB_WORKSPACE/DerivedData" \
-  COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGNING_ALLOWED=NO build
-```
-
-Then resolves the `.app` the same way as `ios-build.yml` and publishes it with
-`mobai-ci share --device ... --app ... --duration ...` (needs the
-`MOBAI_API_KEY` secret). This workflow is third-party specific; drop or rewrite
-it if MobAI is no longer used.
+- One workflow, named `Terminal-ios`, replaces the old `test.yml` / `ios-build.yml` /
+  `ios-share.yml` trio (the MobAI simulator-sharing flow is dropped).
+- Triggers: `push` and `pull_request` on `main`, plus `workflow_dispatch` with a
+  `configuration` input (`Debug` default, `Release` optional).
+- `test` job: checkout, Xcode 27, Ruby 3.3, `gem install bundler` + `bundle install`,
+  then `bundle exec fastlane tests`.
+- `build` job: `needs: test`, `workflow_dispatch` only, builds an unsigned IPA with
+  `CODE_SIGNING_ALLOWED=NO` for `generic/platform=iOS`, stages `build/Payload`,
+  zips `Terminal-ios.ipa`, and uploads it as artifact `Terminal-ios-unsigned-ipa`
+  (7-day retention).
+- Both jobs run on the self-hosted label `xcode-27` with Xcode pinned to 27.0 via
+  `maxim-lobanov/setup-xcode@v1`.
+- The file exists on disk but is **not** in the repository: the `gh` token has no
+  `workflow` scope, and `.github/` is listed in `.git/info/exclude`. Add the scope
+  (or upload via the web UI) and remove the exclude line to publish it.
 
 ## Progress snapshot (2026-09-26)
 
@@ -354,16 +278,20 @@ Sources/
    dependency) before Phase 1 starts.
 4. Pick the bundled monospace font (system `Menlo`/`SF Mono` vs bundled); the
    ANSI subset to support depends on it.
-5. `bundle exec fastlane tests` has never been verified green: the `Test`
-   workflow installs bundler but never runs `bundle install`, so the job fails
-   in about a second for a reason unrelated to the code.
+5. `bundle exec fastlane tests` has never been verified green. The old `Test` workflow
+   never ran `bundle install`, which is why it failed in about a second; the new
+   `Terminal-ios.yaml` does run it, so the first CI run on `xcode-27` is the real
+   verification and may surface genuine test or toolchain failures.
+6. Publish `.github/workflows/Terminal-ios.yaml` to GitHub: needs `workflow` scope on the
+   PAT (or a manual upload), then remove the `.github/` line from `.git/info/exclude`.
 
 ### Tree hygiene (intentional, not breakage)
 
 - `LICENSE` and `README.md` are deleted in the working tree from the upstream
   template reset. They stay deleted unless someone wants them back; a fresh
   `README.md` belongs to Phase 3 (App Store metadata).
-- The three GitHub Actions workflow files are hidden from git with
-  `git update-index --assume-unchanged`. They still exist on disk and in history,
-  so nothing is lost - restore with `git update-index --no-assume-unchanged`.
+- `.github/` (holding `workflows/Terminal-ios.yaml`) is excluded from the index via
+  `.git/info/exclude`, so it can never be committed by accident while the token lacks
+  `workflow` scope. The file is intact on disk; publishing it needs the scope plus
+  removing that exclude line.
 
