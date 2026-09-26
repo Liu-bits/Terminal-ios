@@ -1,0 +1,98 @@
+name: Terminal-ios
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: Build configuration for the unsigned IPA
+        required: false
+        default: Debug
+        type: choice
+        options:
+          - Debug
+          - Release
+
+concurrency:
+  group: terminal-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests (Xcode 27)
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 27
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '27.0'
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Install needed software
+        run: |
+          gem install xcpretty -N
+          gem install bundler -N
+          bundle install
+
+      - name: Run unit tests
+        run: bundle exec fastlane tests
+
+  build:
+    name: Unsigned IPA
+    runs-on: xcode-27
+    needs: test
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 27
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '27.0'
+
+      - name: Record built commit
+        run: echo "Building ${{ github.sha }} on ${{ github.ref_name }}"
+
+      - name: Build unsigned app
+        run: |
+          xcodebuild -project Sources/Terminal-ios.xcodeproj \
+            -scheme 'Terminal-ios' \
+            -configuration '${{ inputs.configuration }}' \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath DerivedData \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            DEBUG_INFORMATION_FORMAT=dwarf \
+            ONLY_ACTIVE_ARCH=YES -quiet \
+            SWIFT_ENABLE_COMPILE_CACHE=YES CLANG_ENABLE_COMPILE_CACHE=YES \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Verify the built Info.plist keeps the scene manifest
+        run: |
+          APP=$(find DerivedData/Build/Products -maxdepth 2 -type d -name '*.app' | head -1)
+          test -n "$APP" || { echo "::error::no .app found under DerivedData"; exit 1; }
+          echo "Built app: $APP"
+          /usr/libexec/PlistBuddy -c 'Print :UIApplicationSceneManifest' "$APP/Info.plist" \
+            || { echo "::error::UIApplicationSceneManifest missing - iOS 27 apps without scenes crash on launch"; exit 1; }
+
+      - name: Package IPA
+        run: |
+          APP=$(find DerivedData/Build/Products -maxdepth 2 -type d -name '*.app' | head -1)
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          cd build && zip -rq "Terminal-ios.ipa" Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Terminal-ios-unsigned-ipa
+          path: build/*.ipa
+          retention-days: 7

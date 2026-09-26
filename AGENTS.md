@@ -187,12 +187,14 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
 ## Build and test
 
 - There is no Xcode toolchain locally (Windows), so changes are compiled by CI.
-- CI is a single workflow: `.github/workflows/Terminal-ios.yaml`. Its `test` job runs on
-  every push/PR to `main`; its `build` job is `workflow_dispatch`-only on runner label
-  `xcode-27` and produces an unsigned `ipa` artifact (`Terminal-ios-unsigned-ipa`).
-  The build job verifies the built `Info.plist` keeps `UIApplicationSceneManifest` and
-  prints the built commit - a stale or wrong-branch build is the most common reason a fix
-  looks like it did not work, so always check the run's `head_sha`.
+- CI is a single workflow, `.github/workflows/Terminal-ios.yaml`, tracked in the repo
+  (the `gh` token now carries the `workflow` scope; the old `.github/` exclude rule is
+  gone). Its `test` job runs on every push/PR to `main`; its `build` job is
+  `workflow_dispatch`-only on runner label `xcode-27` and produces an unsigned `ipa`
+  artifact (`Terminal-ios-unsigned-ipa`). The build job verifies the built `Info.plist`
+  keeps `UIApplicationSceneManifest` and prints the built commit - a stale or
+  wrong-branch build is the most common reason a fix looks like it did not work, so
+  always check the run's `head_sha`.
 - Unit tests live in `Sources/Terminal-iosTests` (Swift Testing) and run via
   `bundle exec fastlane tests` (`run_tests` on scheme `Terminal-ios`, simulator
   `iPhone 17`, `Terminal-iosUITests` skipped).
@@ -240,21 +242,11 @@ only consumes artifacts produced by CI:
   (7-day retention).
 - Both jobs run on the self-hosted label `xcode-27` with Xcode pinned to 27.0 via
   `maxim-lobanov/setup-xcode@v1`.
-- The file exists on disk but is **not** in the repository: the `gh` token has no
-  `workflow` scope, and `.github/` is listed in `.git/info/exclude`. To publish it, add the
-  `workflow` scope to the PAT (GitHub -> Settings -> Developer settings -> Personal access
-  tokens -> the `ghp_...` token -> tick `workflow` -> Update token; the token string does
-  not change, so nothing local needs re-authenticating), then either push normally or,
-  while `git push` is still unusable here, upload it through the contents API:
-
-  ```bash
-  gh api --method PUT repos/Liu-bits/Terminal-ios/contents/.github/workflows/Terminal-ios.yaml \
-    -f message="ci: add Terminal-ios workflow" \
-    -f content="$(base64 -w0 .github/workflows/Terminal-ios.yaml)"
-  ```
-
-  Afterwards drop the `.github/` line from `.git/info/exclude` and re-run
-  `support/push_via_api.py` so the local and remote `main` SHAs stay identical.
+- Because `git push` is unusable here, the workflow was published through
+  `support/push_via_api.py` once the token gained the `workflow` scope. If the scope is
+  ever lost, the contents API still needs it; re-add it with
+  `gh auth refresh -h github.com -s workflow` or by editing the PAT under
+  GitHub -> Settings -> Developer settings -> Personal access tokens.
 
 ## Progress snapshot (2026-09-26)
 
@@ -313,10 +305,9 @@ Sources/
 - `LICENSE` and `README.md` are deleted in the working tree from the upstream
   template reset. They stay deleted unless someone wants them back; a fresh
   `README.md` belongs to Phase 3 (App Store metadata).
-- `.github/` (holding `workflows/Terminal-ios.yaml`) is excluded from the index via
-  `.git/info/exclude`, so it can never be committed by accident while the token lacks
-  `workflow` scope. The file is intact on disk; publishing it needs the scope plus
-  removing that exclude line.
+- `.github/workflows/Terminal-ios.yaml` is tracked normally now that the token has the
+  `workflow` scope. Do not re-add a `.github/` entry to `.git/info/exclude` unless the
+  scope is lost again.
 - The branch `archive/pre-rename-history` is deliberately kept as an archive: it still
   holds the pre-rename history (`iOSSampleApp` paths) and the three original workflow
   files (`ios-build.yml`, `ios-share.yml`, `test.yml`) that `Terminal-ios.yaml` replaced.
