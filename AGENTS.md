@@ -241,8 +241,20 @@ only consumes artifacts produced by CI:
 - Both jobs run on the self-hosted label `xcode-27` with Xcode pinned to 27.0 via
   `maxim-lobanov/setup-xcode@v1`.
 - The file exists on disk but is **not** in the repository: the `gh` token has no
-  `workflow` scope, and `.github/` is listed in `.git/info/exclude`. Add the scope
-  (or upload via the web UI) and remove the exclude line to publish it.
+  `workflow` scope, and `.github/` is listed in `.git/info/exclude`. To publish it, add the
+  `workflow` scope to the PAT (GitHub -> Settings -> Developer settings -> Personal access
+  tokens -> the `ghp_...` token -> tick `workflow` -> Update token; the token string does
+  not change, so nothing local needs re-authenticating), then either push normally or,
+  while `git push` is still unusable here, upload it through the contents API:
+
+  ```bash
+  gh api --method PUT repos/Liu-bits/Terminal-ios/contents/.github/workflows/Terminal-ios.yaml \
+    -f message="ci: add Terminal-ios workflow" \
+    -f content="$(base64 -w0 .github/workflows/Terminal-ios.yaml)"
+  ```
+
+  Afterwards drop the `.github/` line from `.git/info/exclude` and re-run
+  `support/push_via_api.py` so the local and remote `main` SHAs stay identical.
 
 ## Progress snapshot (2026-09-26)
 
@@ -305,4 +317,8 @@ Sources/
   `.git/info/exclude`, so it can never be committed by accident while the token lacks
   `workflow` scope. The file is intact on disk; publishing it needs the scope plus
   removing that exclude line.
+- The branch `archive/pre-rename-history` is deliberately kept as an archive: it still
+  holds the pre-rename history (`iOSSampleApp` paths) and the three original workflow
+  files (`ios-build.yml`, `ios-share.yml`, `test.yml`) that `Terminal-ios.yaml` replaced.
+  It is never merged; read from it with `git show archive/pre-rename-history:<path>`.
 
