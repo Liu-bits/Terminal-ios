@@ -128,7 +128,8 @@ struct BuiltinsTests {
         #expect(engine.run("test abc = abc").exitCode == 0)
         #expect(engine.run("expr 2 + 3").output == "5")
         #expect(engine.run("expr 7 / 0").exitCode == 2)
-        #expect(engine.run("echo $?").output == "0")
+        // `$?` carries the previous command's status; keep it self-contained.
+        #expect(engine.run("true; echo $?").output == "0")
         #expect(engine.run("false; echo $?").output == "1")
     }
 
