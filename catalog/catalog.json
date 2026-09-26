@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "name": "Terminal-ios bundled catalog",
+  "generated": "2026-09-26",
+  "entries": [
+    {
+      "name": "hello",
+      "version": "1.0.0",
+      "kind": "script",
+      "summary": "greet someone - the smallest catalog package",
+      "provides": [
+        "hello"
+      ],
+      "payload": "payloads/hello.sh",
+      "sha256": "8d6a9ad9b20bdf837fb377e7005a8dcdb92bfbc8c07329b6e536105b0a91b621",
+      "source": "Terminal-ios",
+      "license": "MIT"
+    },
+    {
+      "name": "sysinfo",
+      "version": "1.0.0",
+      "kind": "script",
+      "summary": "one screen of facts about the sandbox",
+      "provides": [
+        "sysinfo"
+      ],
+      "payload": "payloads/sysinfo.sh",
+      "sha256": "4b00985c7947307986dbdda52c8602153da12b1d9f9899e2d0d21a39bf040ea4",
+      "source": "Terminal-ios",
+      "license": "MIT"
+    },
+    {
+      "name": "mkproject",
+      "version": "1.0.0",
+      "kind": "script",
+      "summary": "scaffold a project directory (src, tests, README)",
+      "provides": [
+        "mkproject"
+      ],
+      "payload": "payloads/mkproject.sh",
+      "sha256": "3ff37e9e4667f950fb182da49614b99710ccc29399fc04851d5cc00966fb86ce",
+      "source": "Terminal-ios",
+      "license": "MIT"
+    },
+    {
+      "name": "backup",
+      "version": "1.0.0",
+      "kind": "script",
+      "summary": "timestamped directory backup into .backups",
+      "provides": [
+        "backup"
+      ],
+      "payload": "payloads/backup.sh",
+      "sha256": "29c39a0f9fc84fbc7213b1c587bcd489d30ed6af59ca216819aade41bf05192c",
+      "source": "Terminal-ios",
+      "license": "MIT"
+    },
+    {
+      "name": "sum",
+      "version": "1.0.0",
+      "kind": "script",
+      "summary": "add the integers on stdin",
+      "provides": [
+        "sum"
+      ],
+      "payload": "payloads/sum.sh",
+      "sha256": "da2fffc2974a2e1c0d67cb8f12aca4fd34a00afdafb7fc33ba3b3c8dfe9bd7ec",
+      "source": "Terminal-ios",
+      "license": "MIT"
+    },
+    {
+      "name": "python-runtime",
+      "version": "3.13.5",
+      "kind": "runtime",
+      "summary": "CPython built for the bundled WASM engine (no JIT)",
+      "provides": [
+        "python3",
+        "python",
+        "py",
+        "pip",
+        "pip3"
+      ],
+      "payload": null,
+      "sha256": null,
+      "source": "python/cpython (wasm32-wasi build)",
+      "license": "PSF-2.0"
+    },
+    {
+      "name": "mingw-toolchain",
+      "version": "16.1.0",
+      "kind": "toolchain",
+      "summary": "GCC/MinGW-style C toolchain targeting WASM (never native Mach-O)",
+      "provides": [
+        "gcc",
+        "cc",
+        "clang",
+        "make"
+      ],
+      "payload": null,
+      "sha256": null,
+      "source": "mingw-w64 / llvm (wasm32-wasi build)",
+      "license": "GPL-3.0-or-later"
+    }
+  ]
+}

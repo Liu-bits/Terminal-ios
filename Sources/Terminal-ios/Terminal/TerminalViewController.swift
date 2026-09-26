@@ -148,8 +148,8 @@ final class TerminalViewController: UIViewController {
         appendLine("$ \(line)")
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed == "help" {
-            appendLine("Built-ins: cd ls pwd cat echo env export clear history")
-            appendLine("Operators: | > >> < && || ;  Variables: $VAR ${VAR}")
+            // Rendered from the live command table so the list cannot drift.
+            appendLine(ShellBuiltins.helpText())
             return
         }
         if trimmed.isEmpty {

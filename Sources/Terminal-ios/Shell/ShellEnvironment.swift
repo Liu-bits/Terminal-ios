@@ -21,6 +21,10 @@ struct ShellEnvironment {
     }
 
     /// Expands `$VAR` and `${VAR}` in a word. `$$` stays literal.
+    ///
+    /// The special single-character forms `$?`, `$#`, `$@` and `$$` are
+    /// resolved from the same variable table, which the session keeps filled
+    /// (`$?` is the last exit status, `$#`/`$@` the positional parameters).
     func expand(_ word: String) -> String {
         var result = ""
         var index = word.startIndex
@@ -39,6 +43,12 @@ struct ShellEnvironment {
             }
             if word[next] == "$" {
                 result.append("$$")
+                index = word.index(after: next)
+                continue
+            }
+            if word[next] == "?" || word[next] == "#" || word[next] == "@" || word[next] == "*" {
+                let name = word[next] == "*" ? "@" : String(word[next])
+                result += variables[name] ?? ""
                 index = word.index(after: next)
                 continue
             }

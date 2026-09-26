@@ -16,95 +16,201 @@ Instructions for AI coding agents working in this repository.
 - Xcode project: `Sources/Terminal-ios.xcodeproj`. It uses file-system synchronized
   groups, so adding or deleting files on disk is enough, no manual project edits needed.
 
-## Product direction: offline on-device terminal (Terminal-ios)
+## Product direction: on-device Linux-like terminal (Terminal-ios)
 
-- Goal: an App Store-compliant, fully offline Linux-like terminal for iOS. No
-  downloads, no cloud, no accounts: every tool and package ships inside the app
-  bundle and everything runs inside the iOS sandbox.
+- Goal: an App Store-compliant Linux-like terminal for iOS. Everything runs
+  inside the iOS sandbox, with no accounts and no cloud of our own.
+- **Updated 2026-09-26 (owner's decision): the app may use the network and may
+  download packages - as long as the build still passes App Store review.** The
+  exact line between "allowed" and "rejected" is in
+  [Network policy](#network-policy-what-may-be-downloaded) below; read it before
+  adding any fetch path. The short version: data and *interpreted source* are
+  fine, native binaries and JIT are not, and every downloaded payload is
+  digest-verified and user-initiated.
 - `Terminal-ios` is both the repository name and the Xcode target/product name.
   Swift module name is `Terminal_ios` (Xcode replaces the hyphen); use
   `@testable import Terminal_ios` in tests.
 
-### Compliance rules (non-negotiable, App Store Review Guidelines 2.5.2)
+### Compliance rules (non-negotiable)
 
-- Only code signed in the app bundle may execute. Never download executable code
-  of any kind (no native binaries, no scripts, no package payloads from network).
-- iOS forbids `fork`/`exec`/`posix_spawn` of unsigned code and forbids JIT in App
-  Store builds, so all "processes" run in-process: built-in Swift command
-  implementations, embedded interpreters, and a bundled WASM engine (interpreter
-  mode, no JIT).
-- A C toolchain with MinGW-style UX is allowed only if it compiles to WASM and
-  runs in the bundled WASM engine - never native Mach-O. It is post-MVP; do not
-  promise native `gcc` behavior.
-- `pip`/`apt` are offline UX metaphors over curated catalogs compiled into the
-  bundle (pure-Python wheels; prebuilt WASM/script modules). Package code must
-  contain no network fetch path - offline by construction, not by flag.
-- File access stays inside the app sandbox. No private APIs, no extra
-  entitlements.
+App Store Review Guidelines 2.5.2 says, in full, that apps "should be
+self-contained in their bundles, and may not download, install, or execute code
+which introduces or changes features or functionality of the app, including
+other apps". The rules below are how this project stays on the right side of it,
+and they override any feature request that conflicts with them:
+
+- **Never** download or execute native code: no Mach-O binaries, no `.dylib`,
+  no native CLI tools, no JIT and no `mmap(PROT_EXEC)`. iOS cannot
+  `fork`/`exec`/`posix_spawn` unsigned code anyway, and 2.5.2 forbids wrapping it.
+- **Never** let a downloaded payload replace or extend the app's own logic; it
+  may only be *interpreted* by interpreters already signed into the bundle
+  (our shell, the bundled Python, the WASM engine in interpreter mode).
+- **Always** treat downloaded packages as interpreted source or data:
+  shell scripts, pure-Python wheels, WASM modules (interpreter only). Nothing
+  that needs `dlopen`, code signing, or executable memory.
+- **Always** verify content hashes before use (SHA-256, recorded in the
+  manifest), pin the source to a fixed host + path prefix, and require the
+  transport to be HTTPS with certificate validation. A payload that fails to
+  verify is discarded, never executed.
+- **Always** make fetching an explicit, visible user action (`apt update`,
+  `pip install`, an install button) - never a silent background download at
+  launch, and never at first run.
+- No private APIs, no extra entitlements. File access stays inside the app
+  sandbox.
+- Compliance takes priority over convenience: if a package cannot be expressed
+  as interpreted code, it does not ship.
+
+Precedent this project relies on: iSH Shell (a Linux-like terminal with a
+package manager) and Pyto / Pythonista (pip installing pure-Python packages on
+device) are both live on the App Store. They all draw the same line - interpreted
+code, no native code, no JIT - and none of them download Mach-O executables.
+
+### Network policy: what may be downloaded
+
+| Category | Allowed? | Notes |
+| --- | --- | --- |
+| Documents, images, text, data files | Yes | Ordinary data, no 2.5.2 question. |
+| Shell scripts from our own catalog | Yes | Interpreted by our shell; digest-verified. |
+| Pure-Python wheels (`py3-none-any`) | Yes | Interpreted by the bundled CPython; no `.so`/`.pyd` members. |
+| WASM modules | Yes, carefully | Interpreter mode only; no JIT, no WASI sockets/process spawn. |
+| Native binaries, `.dylib`, Mach-O, APK/DEB with native payloads | **No** | Rejected by 2.5.2. |
+| Anything that needs `fork`/`exec`, JIT, or `PROT_EXEC` memory | **No** | Also blocked by iOS itself. |
+| Remote code that changes app features (our own UI included) | **No** | Keep feature logic in the signed binary. |
+
+Engineering rules that follow from the table:
+
+1. One pinned source. Default is the bundled catalog; a remote manifest may be
+   added later, but only at a single HTTPS host with a fixed path prefix, and
+   only over TLS with certificate validation (optionally SPKI pinning).
+2. Manifest model is shared by both sources: name, version, kind, provides,
+   payload, sha256, source, license. A remote manifest is just another
+   `Catalog` instance - the installer code is the same.
+3. `kind` decides the execution path: `script` -> our shell, `wheel` -> bundled
+   Python, `wasm` -> bundled WASM engine, `runtime`/`toolchain` -> a bundle of
+   the above. Anything else must be refused with a clear error.
+4. Size and quota: cap per-payload size, cache in the sandbox, and surface total
+   usage so the IPA/container budget stays visible.
+5. Tests must never require the network: the fetcher gets a seam (injected
+   transport) and unit tests use a fake, exactly like the bundled catalog path.
 
 ### Architecture phases
 
-- Phase 0, shell core: UIKit terminal view (ANSI colors), mobile accessory key
-  bar (`Ctrl`/`Esc`/`Tab`/`|`/`/`/`~`), built-in shell (`cd`, `ls`, `pwd`, `cat`,
-  `echo`, `env`, `export`, `clear`, `history`) with pipes, redirection, and env
-  vars - all in Swift, unit-testable in CI with no device and no network.
-  Status: **mostly done, two gaps open** - tokenizer/parser/environment/engine
-  landed with `Shell*Tests` (19 tests across 4 suites); all nine built-ins
-  (`cd`, `ls`, `pwd`, `cat`, `echo`, `env`, `export`, `clear`, `history`) work,
-  along with pipes, redirection and env vars. `TerminalViewController` wires the
-  engine to a dark scrollback with an input row and an accessory key bar
-  (`Tab`/`Esc`/`|`/`/`/`~`/`-`/`Ctrl+C`), Dynamic Type and VoiceOver
-  announcements are in. Still open: **ANSI SGR color rendering** (output is
-  currently a single green `UILabel`) and the split of the view into
+- Phase 0, shell core: UIKit terminal view, accessory key bar, built-in shell
+  with pipes/redirection/env vars, then scripts and the coreutils surface.
+  Status: **shell side done, UI polish open.** The engine now dispatches through
+  a built-in table (~120 commands across file/text/system groups) and supports
+  `$(...)`, `$?`/`$#`/`$1`, assignments, `if`/`elif`/`else`, `for`,
+  `while`/`until`, functions, comments and `sh file.sh`. Open: **ANSI SGR color
+  rendering** (output is still one green `UILabel`) and splitting the view into
   `TerminalTextView` + `AccessoryKeyBar`.
 - Phase 1, Time Machine history (the differentiator): persist every execution to
   local SQLite as a structured snapshot (command + argv, cwd, env, full
   stdout/stderr, exit code, duration). UI offers a snapshot card stream,
-  full-text search over commands and outputs, re-enter (restore cwd/env),
-  replay-with-edits, copy-output, pin-to-action cards, and text export.
-- Phase 2, runtimes + offline catalogs: embedded Python plus the bundled `pip` /
-  `apt`-style catalogs described above.
+  full-text search, re-enter, replay-with-edits, copy-output, pin-to-action
+  cards, and text export.
+- Phase 2, runtimes + catalogs: **catalog and package-manager surface landed**
+  (`apt`/`apt-get`/`apk`/`pip` over the bundled `Catalog`, digest-verified
+  payloads, install/remove/list/search/show/update/sources). Still to build: the
+  bundled WASM engine, the CPython-for-WASM payload (`python3`/`py`/`pip`), the
+  MinGW-style toolchain targeting WASM (`gcc`/`cc`/`clang`/`make`), and the
+  remote manifest fetcher described above.
 - Phase 3, release hardening: saved workspaces, IPA bundle-size and startup-time
-  budgets, App Store metadata and review notes explaining the sandbox /
-  developer-tool compliance.
+  budgets, App Store metadata plus review notes that spell out the
+  interpreted-code/no-JIT design and point at the iSH/Pyto precedent.
 
 ### Engineering constraints for this direction
 
 - UI stays UIKit/Swift; scene life cycle and launch screen rules above still apply.
 - Unit tests must run offline in the CI simulator; never require network in tests.
-- Track IPA size every release: the offline catalog grows the bundle, so budget it.
+- Track IPA size every release: catalogs and runtimes grow the bundle, so budget it.
+- Every downloaded payload is digest-verified before execution, and the
+  verification lives in `PayloadStore` - do not bypass it.
 
 ## Terminal-ios project structure and needs (target state)
 
 - Theme: dark phosphor-on-black terminal. Monospace text (`Menlo`/`SF Mono`), a
   persistent scrollback, a command input line with a blinking caret, ANSI color
   rendering, and Dynamic Type support; VoiceOver must read new output lines.
-- Source tree (all new code is UIKit/Swift, offline only, no third-party packages):
+- Source tree (all code is UIKit/Swift, no third-party packages):
   - `Sources/Terminal-ios/Terminal/` - UI: `TerminalViewController`,
     `TerminalTextView` (rendering + scrollback), `AccessoryKeyBar`
     (`Ctrl`/`Esc`/`Tab`/`|`/`/`/`~`), `HistoryCardCell` snapshot card stream.
-  - `Sources/Terminal-ios/Shell/` - pure-logic shell core with no UIKit import:
-    tokenizer/quoting, `$VAR` expansion, pipes (`|`), redirection (`>`, `>>`,
-    `<`), `&&`/`||`/`;` chaining, plus built-ins (`cd`, `ls`, `pwd`, `cat`,
-    `echo`, `env`, `export`, `clear`, `history`). 100% unit-testable in CI.
+  - `Sources/Terminal-ios/Shell/` - pure-logic shell core, no UIKit import:
+    - `ShellTokenizer`, `ShellParser`, `ShellEnvironment` - words, quoting,
+      `$VAR`/`$?`/`$#`/`$1`, pipes, redirection, `&&`/`||`/`;`
+    - `ShellEngine` - dispatch, pipelines, `$(...)` substitution, assignments,
+      function calls, script execution; the only type that owns session state
+    - `ShellBuiltin` - `ShellRunContext` (what a command may touch), `ShellArgs`
+      flag/operand parser, shared file helpers
+    - `BuiltinsFile` / `BuiltinsText` / `BuiltinsSystem` - the command surface
+    - `ShellBuiltins` - the merged command table plus `help` text
+    - `ShellScriptParser` / `ShellScriptRunner` - `if`/`elif`/`else`, `for`,
+      `while`/`until`, functions, comments, continuations, `exit`
+    - 100% unit-testable in CI; no device, no network.
+  - `Sources/Terminal-ios/Packages/` - the package layer:
+    - `Catalog` - manifest model plus `PayloadStore`, which verifies every
+      payload's SHA-256 before it is used
+    - `PackageManager` - install/remove/list/search/show/update/sources over a
+      `Catalog`, writing shims under `<sandbox>/.packages/bin`
+    - `BundledCatalog.swift` - **generated** by `support/generate_catalog.py`
   - `Sources/Terminal-ios/History/` - Time Machine snapshot store: local SQLite
     (command + argv, cwd, env, full stdout/stderr, exit code, duration),
     full-text search, re-enter (restore cwd/env), replay-with-edits,
     copy-output, pin-to-action cards, plain-text export. No SwiftData, no CloudKit.
-  - `Sources/Terminal-ios/Resources/` - offline catalogs compiled into the bundle
-    (`python wheels`, `wasm modules`, `script modules`): manifests + payloads,
-    content-hashed (`sha256`) and verified at load. No network fetch path anywhere.
-  - `Sources/Terminal-iosTests/` - Swift Testing suites mirroring the above:
-    `Shell*Tests`, `History*Tests`, `Terminal*Tests` (host-side render model only).
-- Needs before Phase 0 starts: a bundled monospace font decision (system font vs
-  bundled), the ANSI SGR subset to support, the SQLite access layer (raw
-  `sqlite3` vs GRDB-style micro-wrapper - no external SPM dependency), and the
-  `fastlane tests` lane passing on the cleaned tree.
-- Needs for Phase 2: choose the embedded Python build and the WASM interpreter
-  crate/version; both must be App Store-safe (no JIT, no dynamic download).
+  - `catalog/` (repo root, outside the Xcode target) - the package source of
+    truth: `catalog.json` (manifest, sha256 filled in by the generator) and
+    `payloads/*.sh`. Keeping it out of `Sources/` means the Xcode
+    file-system-synchronized group never sees raw `.sh`/`.json` files.
+  - `Sources/Terminal-iosTests/` - Swift Testing suites: `ShellEngineTests`,
+    `ShellParserTests`, `ShellTokenizerTests`, `BuiltinsTests`,
+    `ShellScriptTests`, `PackageManagerTests`, `TerminalViewControllerTests`.
+- Needs for Phase 2 (in progress): the bundled WASM interpreter
+  (interpreter-mode only, no JIT), the CPython-for-WASM payload behind
+  `python3`/`pip`, and the MinGW-style toolchain that targets WASM.
 - Naming: the Xcode target/product, the bundle display name, and the repository
   are all `Terminal-ios`. Bundle identifiers are `com.liu.Terminal-ios[Tests|UITests]`;
   change the `com.liu` prefix if a different team prefix is required.
+
+### Command surface (as built)
+
+`help` prints the live table, so the count in this doc is only a sanity check:
+
+- **files** - `ls` (`-a -l -d`) `cat` (`-n`) `mkdir` (`-p`) `rmdir` `rm` (`-r -f`)
+  `cp` (`-r -f`) `mv` `touch` `stat` `ln` (`-s`) `basename` `dirname` `realpath`
+  `find` (`-name -type -maxdepth`) `tree` (`-L`) `du` `df` `chmod` (octal and
+  `+x`-style) `file` `mktemp`
+- **text** - `echo` (`-n -e`) `printf` `head` `tail` `wc` (`-l -w -c`) `grep` (`-ivnclrE`)
+  `sed` (`s///`, `-n`, `Nd`) `sort` (`-nruf`) `uniq` (`-cdu`) `cut` (`-d -f -c`)
+  `tr` (`-d -s`, ranges) `tee` (`-a`) `nl` `rev` `tac` `seq` `yes` `base64` (`-d`)
+  `sha256sum` `sha1sum` `md5sum` `cksum` `diff` `strings`
+- **system** - `whoami` `id` `uname` (`-a -m -s -r`) `hostname` `arch` `nproc`
+  `date` (+strftime subset) `uptime` `sleep` `tty` `ps` `kill` `free`
+  `env` `printenv` `unset` `set` `export` `read` `true` `false` `test` `[`
+  `expr` `eval` `sh` `source` `.` `which` `type` `command` `help` `man` `version`
+- **packages** - `apt` `apt-get` `apk` `pip` `pip3`; runtimes declared in the
+  catalog: `python3` `python` `py` `gcc` `cc` `clang` `make`
+- **engine commands** - `cd` `pwd` `clear` `history` `exit`
+
+### Offline catalog and package managers
+
+- `catalog/catalog.json` is the only package source compiled into the app; the
+  generator writes each payload's SHA-256 back into it, so the manifest is
+  self-describing and reviewable.
+- `support/generate_catalog.py` embeds the manifest **and** every payload as
+  Swift string literals (`BundledCatalog.swift`). Embedding beats bundle
+  resources here: the unit tests run without an app bundle, and nothing depends
+  on how Xcode treats `.sh`/`.json` files.
+- Install flow: resolve entry -> `PayloadStore.text(for:)` (digest check) ->
+  materialise under `<sandbox>/.packages/prefix` -> write a shim per provided
+  command under `<sandbox>/.packages/bin` -> record the name in
+  `<sandbox>/.packages/installed.json`.
+- `apt list` shows `ii`/`un` marks, `apt show` prints the digest and license,
+  `apt update` re-verifies what is installed, `apt sources` prints the catalog
+  identity. `apk` maps `add`/`del`/`info` onto the same operations.
+- Entries with `"payload": null` (today `python-runtime`, `mingw-toolchain`) are
+  *declared* runtimes: `apt install` reports that the payload is not bundled
+  instead of pretending, and the shims say the same. Add `payload` + `sha256`
+  when the WASM payloads land.
 
 The tree below is what stays after this reset (scene life cycle, launch screen,
 project, CI, tests) - everything else is deleted and rebuilt per the plan above.
@@ -116,10 +222,19 @@ Sources/
     SceneDelegate.swift        # scene life cycle, owns the window (load bearing)
     Info.plist                 # scene manifest + $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION)
     Scenarios/Common/Base.lproj/LaunchScreen.storyboard
+    Shell/                     # tokenizer, parser, engine, builtins, scripts
+    Packages/                  # catalog, package manager, generated payloads
+    Terminal/                  # TerminalViewController
   Terminal-ios.xcodeproj/      # file-system synchronized groups + schemes
-  Terminal-iosTests/           # placeholder VC tests (Phase 0 replaces them)
+  Terminal-iosTests/           # Swift Testing suites
   Terminal-iosUITests/         # placeholder UI test (Phase 0 replaces it)
   .swiftlint.yml
+catalog/
+  catalog.json                 # package manifest (sha256 filled by the generator)
+  payloads/*.sh                # script payloads
+support/
+  generate_catalog.py          # regenerates BundledCatalog.swift
+  push_via_api.py              # pushes main when `git push` cannot reach GitHub
 ```
 
 
@@ -215,13 +330,13 @@ The app is manually verified on a physical **iPhone 13 running iOS 27.0** (arm64
 deployment target is 18.0). There is **no Mac and no Xcode** on this machine, so the phone
 only consumes artifacts produced by CI:
 
-- Builds come from the `iOS Build` workflow as an **unsigned `ipa`**; sign and install it
-  locally with AltStore/Sideloadly and delete the previously installed app first.
-- **Install an IPA built from the commit you want to test.** `workflow_dispatch` builds the
-  branch selected in the UI while `snapshot_ref` is empty, so a build of `main` started
-  before a fix was merged ships the old code - always check the run's `head_branch` /
-  `head_sha` and download the artifact of that exact run. A stale build is the most common
-  reason a fix looks like it did not work.
+- Builds come from the `build` job of `Terminal-ios.yaml` (`workflow_dispatch`) as an
+  **unsigned `ipa`**; sign and install it locally with AltStore/Sideloadly and delete the
+  previously installed app first.
+- **Install an IPA built from the commit you want to test.** The build job reports the
+  commit it compiled (`Record built commit`) and checks the produced `Info.plist` still
+  carries `UIApplicationSceneManifest`; compare that against the commit you expect. A
+  stale artifact is the most common reason a fix looks like it did not work.
 - Unit and UI tests never run on the phone: they run in CI (`fastlane tests`, simulator
   `iPhone 17`). This machine cannot produce symbolicated device crash logs through Xcode.
 - Read crash logs **on the phone**: Settings -> Privacy & Security -> Analytics &
@@ -254,57 +369,84 @@ only consumes artifacts produced by CI:
   `gh auth refresh -h github.com -s workflow` or by editing the PAT under
   GitHub -> Settings -> Developer settings -> Personal access tokens.
 
-## Progress snapshot (2026-09-26)
+## Progress snapshot (2026-09-26, evening)
 
-### Overall: Phase 0 ~85%, Phases 1-3 not started
+### Overall: Phase 0 shell done (UI polish open), Phase 2 surface started, Phases 1/3 not started
 
 | Phase | Scope | Status |
 | ----- | ----- | ------ |
-| 0 | Shell core + terminal UI | ~85% - two gaps open (ANSI colors, view split) |
+| 0 | Shell core + command surface + terminal UI | Shell done (~120 commands, scripts); UI gaps open (ANSI colors, view split) |
 | 1 | Time Machine history (SQLite) | Not started - `Sources/Terminal-ios/History/` does not exist |
-| 2 | Embedded runtimes + offline catalogs | Not started - `Sources/Terminal-ios/Resources/` does not exist |
+| 2 | Runtimes + package catalogs | Catalog + `apt`/`apk`/`pip` + digest verification landed; WASM engine, CPython payload, MinGW toolchain, remote fetcher still to build |
 | 3 | Release hardening | Not started |
 
 ### What actually exists
 
 ```text
-Sources/
-  Terminal-ios/
-    AppDelegate.swift
-    SceneDelegate.swift                 # scene life cycle, load bearing
-    Info.plist                          # scene manifest + display name Terminal-ios
-    Scenarios/Common/Base.lproj/LaunchScreen.storyboard
-    Shell/                              # 701 lines, no UIKit
-      ShellTokenizer.swift  141
-      ShellParser.swift     157
-      ShellEnvironment.swift 129
-      ShellEngine.swift     274
-    Terminal/
-      TerminalViewController.swift 199
-  Terminal-ios.xcodeproj/            # scheme Terminal-ios, PRODUCT_MODULE_NAME Terminal_ios
-  Terminal-iosTests/                 # 235 lines, 19 tests (Swift Testing)
-  Terminal-iosUITests/               # placeholder UI test
-  .swiftlint.yml
+Sources/Terminal-ios/
+  AppDelegate.swift, SceneDelegate.swift      # scene life cycle, load bearing
+  Info.plist                                  # scene manifest + display name Terminal-ios
+  Scenarios/Common/Base.lproj/LaunchScreen.storyboard
+  Shell/                                      # no UIKit import
+    ShellTokenizer.swift, ShellParser.swift, ShellEnvironment.swift
+    ShellEngine.swift                         # dispatch, pipelines, $(), assignments
+    ShellBuiltin.swift                        # context, flag parser, file helpers
+    BuiltinsFile.swift, BuiltinsText.swift, BuiltinsSystem.swift
+    ShellBuiltins.swift                       # command table + help text
+    ShellScriptParser.swift, ShellScriptRunner.swift
+  Packages/
+    Catalog.swift                             # manifest + PayloadStore (sha256)
+    PackageManager.swift                      # apt/apk/pip backend
+    BundledCatalog.swift                      # GENERATED - do not edit
+  Terminal/TerminalViewController.swift
+Sources/Terminal-iosTests/
+  ShellEngineTests, ShellParserTests, ShellTokenizerTests,
+  BuiltinsTests, ShellScriptTests, PackageManagerTests, TerminalViewControllerTests
+Sources/Terminal-iosUITests/AppUITests.swift
+catalog/catalog.json + catalog/payloads/*.sh  # package source of truth
+support/generate_catalog.py                   # regenerates BundledCatalog.swift
+support/push_via_api.py                       # push path when `git push` is blocked
 ```
 
 ### Open items, in the order they should be picked up
 
 1. ANSI SGR color rendering - output is a single green `UILabel`, so `\e[31m`
-   and friends are currently dropped. This blocks any real `ls --color` or
-   colored program output.
+   and friends are dropped. This blocks any colored `ls` or program output.
 2. Split `TerminalViewController` into `TerminalTextView` (rendering +
-   scrollback) and `AccessoryKeyBar`, per the target structure above. The view
-   controller is already close to 200 lines and mixes layout with execution.
-3. Decide the SQLite access layer (raw `sqlite3` vs a small wrapper - no SPM
+   scrollback) and `AccessoryKeyBar`; the controller already mixes layout with
+   execution.
+3. Phase 2 core: the bundled **WASM interpreter** (interpreter mode, no JIT).
+   Everything else - CPython, MinGW-style toolchain, third-party WASM tools -
+   depends on it. Design it so the payload comes from the catalog, not from a
+   hard-coded bundle path.
+4. The remote manifest fetcher, once (3) exists: HTTPS + fixed host/path prefix,
+   digest-verified, user-initiated only. Keep the injected-transport seam so the
+   unit tests stay offline.
+5. Decide the SQLite access layer (raw `sqlite3` vs a small wrapper - no SPM
    dependency) before Phase 1 starts.
-4. Pick the bundled monospace font (system `Menlo`/`SF Mono` vs bundled); the
-   ANSI subset to support depends on it.
-5. `bundle exec fastlane tests` has never been verified green. The old `Test` workflow
-   never ran `bundle install`, which is why it failed in about a second; the new
-   `Terminal-ios.yaml` does run it, so the first CI run on `xcode-27` is the real
-   verification and may surface genuine test or toolchain failures.
-6. Publish `.github/workflows/Terminal-ios.yaml` to GitHub: needs `workflow` scope on the
-   PAT (or a manual upload), then remove the `.github/` line from `.git/info/exclude`.
+6. `while read` loops are capped at 10000 iterations and `yes` prints a bounded
+   number of lines; both are deliberate guards against locking the UI thread.
+   Revisit if a real workload needs more.
+7. Unknown-command UX: a command that resolves to neither a built-in, a shell
+   function, an installed package nor a file prints `command not found` with
+   exit 127. A `command-not-found` suggestion hook would be a nice touch.
+
+### Tree hygiene (intentional, not breakage)
+
+- `LICENSE` and `README.md` are deleted in the working tree from the upstream
+  template reset. They stay deleted unless someone wants them back; a fresh
+  `README.md` belongs to Phase 3 (App Store metadata).
+- `.github/workflows/Terminal-ios.yaml` is tracked normally now that the token has the
+  `workflow` scope. Do not re-add a `.github/` entry to `.git/info/exclude` unless the
+  scope is lost again.
+- The branch `archive/pre-rename-history` is deliberately kept as an archive: it still
+  holds the pre-rename history (`iOSSampleApp` paths) and the three original workflow
+  files (`ios-build.yml`, `ios-share.yml`, `test.yml`) that `Terminal-ios.yaml` replaced.
+  It is never merged; read from it with `git show archive/pre-rename-history:<path>`.
+- `BundledCatalog.swift` is generated. Edit `catalog/catalog.json` and
+  `catalog/payloads/*`, then re-run `support/generate_catalog.py`; the script also
+  writes the SHA-256 digests back into the manifest. A test fails if the digests
+  and the embedded payloads ever drift apart.
 
 ### Tree hygiene (intentional, not breakage)
 
