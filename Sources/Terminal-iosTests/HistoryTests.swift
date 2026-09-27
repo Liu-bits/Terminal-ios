@@ -117,7 +117,7 @@ struct HistoryTests {
 
         // Dates survive the ISO-8601 round trip.
         let date = Date(timeIntervalSince1970: 1_800_000_000)
-        store.append(HistoryEntry(command: "dated", date: date, directory: "~"))
+        store.append(HistoryEntry(date: date, command: "dated", directory: "~"))
         let after = JSONHistoryStore(directory: root, limit: 5)
         let stored = try #require(after.entries().first { $0.command == "dated" })
         #expect(abs(stored.date.timeIntervalSince(date)) < 1)
