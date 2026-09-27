@@ -426,6 +426,15 @@ final class ShellEngine {
             return StepResult(runScript(script.body, name: name, args: args, stdin: input))
         }
 
+        // A wasm package runs in the bundled interpreter (no JIT, no syscalls
+        // beyond the WASI subset this shell provides).
+        if let package = manager.wasm(for: name) {
+            let bytes = [UInt8](package.bytes)
+            return StepResult(
+                WasmBuiltin.execute(bytes, name: name, arguments: [name] + args, context)
+            )
+        }
+
         // Or the command is a script file on disk (`./build.sh`, `tools/run`).
         if let url = environment.resolve(name),
            FileManager.default.fileExists(atPath: url.path),

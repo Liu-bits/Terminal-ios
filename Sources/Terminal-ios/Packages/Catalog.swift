@@ -29,6 +29,9 @@ struct CatalogEntry: Codable, Equatable {
     var id: String?
     var publisher: String?
     var tags: [String]?
+    /// How the payload is embedded: `utf8` (default) or `base64` for binaries
+    /// such as .wasm modules.
+    var encoding: String?
 
     /// Identifier shown by `winget list` / `winget search`.
     var packageID: String {
@@ -115,25 +118,55 @@ typealias PayloadLookup = FetchResult<String>
 /// a tampered payload is refused instead of executed.
 enum PayloadStore {
 
-    static func sha256Hex(_ text: String) -> String {
-        let digest = SHA256.hash(data: Data(text.utf8))
+    static func sha256Hex(_ data: Data) -> String {
+        let digest = SHA256.hash(data: data)
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Returns the payload text for an entry, or a failure reason.
-    static func text(for entry: CatalogEntry) -> PayloadLookup {
+    static func sha256Hex(_ text: String) -> String {
+        sha256Hex(Data(text.utf8))
+    }
+
+    /// Returns the payload bytes for an entry, verifying the digest first.
+    ///
+    /// Binary payloads (`.wasm`) are embedded base64; the digest is always over
+    /// the raw bytes, so the manifest stays verifiable for both kinds.
+    static func bytes(for entry: CatalogEntry) -> FetchResult<Data> {
         guard let path = entry.payload else {
             return .failure("\(entry.name): catalog entry has no payload")
         }
         guard let body = BundledCatalog.payloads[path] ?? BundledCatalog.payloads[ShellRunContext.baseName(path)] else {
             return .failure("\(entry.name): payload \(path) is missing from the bundle")
         }
+        let data: Data
+        if entry.encoding == "base64" {
+            let cleaned = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let decoded = Data(base64Encoded: cleaned) else {
+                return .failure("\(entry.name): payload is not valid base64")
+            }
+            data = decoded
+        } else {
+            data = Data(body.utf8)
+        }
         if let expected = entry.sha256, !expected.isEmpty {
-            let actual = sha256Hex(body)
+            let actual = sha256Hex(data)
             guard actual == expected else {
                 return .failure("\(entry.name): payload digest mismatch (expected \(expected.prefix(12))…, got \(actual.prefix(12))…)")
             }
         }
-        return .success(body)
+        return .success(data)
+    }
+
+    /// Returns the payload text for a text entry, or a failure reason.
+    static func text(for entry: CatalogEntry) -> PayloadLookup {
+        if entry.encoding == "base64" {
+            return .failure("\(entry.name): payload is binary (encoding: base64)")
+        }
+        switch bytes(for: entry) {
+        case .failure(let reason):
+            return .failure(reason)
+        case .success(let data):
+            return .success(String(decoding: data, as: UTF8.self))
+        }
     }
 }

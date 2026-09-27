@@ -214,7 +214,7 @@ enum ShellScriptParser {
 
     /// Turns one segment into one or more items, pulling leading keywords out.
     private static func classify(_ segment: String) -> [Item] {
-        var text = segment.trimmingCharacters(in: .whitespaces)
+        let text = segment.trimmingCharacters(in: .whitespaces)
         if blockKeywords.contains(text) {
             return [.keyword(text)]
         }

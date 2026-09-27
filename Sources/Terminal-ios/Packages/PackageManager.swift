@@ -171,13 +171,13 @@ final class PackageManager {
                 skipped += 1
                 continue
             }
-            let body: String
+            let body: Data
             if target.source.isBundled {
-                switch PayloadStore.text(for: entry) {
+                switch PayloadStore.bytes(for: entry) {
                 case .failure(let reason):
                     return .fail("E: \(reason)")
-                case .success(let text):
-                    body = text
+                case .success(let bytes):
+                    body = bytes
                 }
             } else {
                 guard let transport else {
@@ -187,7 +187,7 @@ final class PackageManager {
                 case .failure(let reason):
                     return .fail("E: \(reason)")
                 case .success(let text):
-                    body = text
+                    body = Data(text.utf8)
                     lines.append("Get:1 \(target.source.id) \(entry.packageID) \(entry.version)")
                 }
             }
@@ -208,7 +208,7 @@ final class PackageManager {
     }
 
     /// Writes the payload into the prefix and creates one shim per command.
-    private func materialize(entry: CatalogEntry, body: String) -> Bool {
+    private func materialize(entry: CatalogEntry, body: Data) -> Bool {
         do {
             try fileManager.createDirectory(at: prefixDirectory, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: binDirectory, withIntermediateDirectories: true)
@@ -217,7 +217,7 @@ final class PackageManager {
         }
         let payloadURL = prefixDirectory.appendingPathComponent("\(entry.name).\(payloadExtension(for: entry))")
         do {
-            try body.write(to: payloadURL, atomically: true, encoding: .utf8)
+            try body.write(to: payloadURL, options: .atomic)
         } catch {
             return false
         }
@@ -505,6 +505,9 @@ final class PackageManager {
         guard let match = resolve(command: command), isInstalled(match.entry.name) else {
             return nil
         }
+        guard match.entry.kind == "script" else {
+            return nil
+        }
         let url = prefixDirectory.appendingPathComponent(
             "\(match.entry.name).\(payloadExtension(for: match.entry))"
         )
@@ -512,5 +515,20 @@ final class PackageManager {
             return nil
         }
         return (match.entry, body)
+    }
+
+    /// Entry providing an installed *wasm* command, plus the module bytes.
+    func wasm(for command: String) -> (entry: CatalogEntry, bytes: Data)? {
+        guard let match = resolve(command: command), isInstalled(match.entry.name) else {
+            return nil
+        }
+        guard match.entry.kind == "wasm" else {
+            return nil
+        }
+        let url = prefixDirectory.appendingPathComponent("\(match.entry.name).wasm")
+        guard let bytes = try? Data(contentsOf: url) else {
+            return nil
+        }
+        return (match.entry, bytes)
     }
 }

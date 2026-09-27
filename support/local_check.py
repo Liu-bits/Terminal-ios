@@ -344,6 +344,87 @@ do {
     _ = root
 }
 
+// --- WebAssembly interpreter -------------------------------------------------
+do {
+    let (engine, root) = makeEngine()
+    check("wasm version", "true", "\(engine.run("wasm --version").output.contains("interpreter"))")
+
+    // Drop the fixtures into the sandbox and run them through the shell.
+    func writeFixture(_ bytes: [UInt8], to name: String) {
+        try? Data(bytes).write(to: root.appendingPathComponent(name))
+    }
+    writeFixture(WasmFixtures.add, to: "add.wasm")
+    writeFixture(WasmFixtures.memory, to: "memory.wasm")
+    writeFixture(WasmFixtures.trap, to: "trap.wasm")
+    writeFixture(WasmFixtures.spin, to: "spin.wasm")
+    writeFixture(WasmFixtures.wasihello, to: "hello.wasm")
+
+    check("wasm info", "true", "\(engine.run("wasm info add.wasm").output.contains("exports:     add"))")
+    check("wasm run hello", "hello from wasm", engine.run("wasm run hello.wasm").output)
+    check("wasm run trap", "true", "\(engine.run("wasm run trap.wasm").output.contains("divide by zero"))")
+    checkExit("wasm run trap exit", 1, engine.run("wasm run trap.wasm").exitCode)
+    checkExit("wasm missing file", 1, engine.run("wasm run nope.wasm").exitCode)
+
+    // Direct calls, with a small instruction budget so the runaway module
+    // returns immediately instead of burning the real default.
+    let tight = WasmInstance.Limits(instructionBudget: 200_000, maxMemoryPages: 8, maxCallDepth: 64)
+    do {
+        let module = try WasmModule.parse(WasmFixtures.add)
+        let host = WASIHost()
+        let instance = try WasmInstance(module: module, host: host, limits: tight)
+        check("wasm invoke add", "42", "\(try instance.invoke(export: "add", arguments: [.i32(20), .i32(22)]).first?.description ?? "?")")
+        check("wasm global", "7", "\(instance.globals.first?.description ?? "?")")
+
+        let control = try WasmInstance(module: try WasmModule.parse(WasmFixtures.controlflow), host: WASIHost(), limits: tight)
+        check("wasm fib(10)", "55", "\(try control.invoke(export: "fib", arguments: [.i32(10)]).first?.description ?? "?")")
+        check("wasm fib(20)", "6765", "\(try control.invoke(export: "fib", arguments: [.i32(20)]).first?.description ?? "?")")
+        check("wasm br_table 0", "10", "\(try control.invoke(export: "classify", arguments: [.i32(0)]).first?.description ?? "?")")
+        check("wasm br_table default", "30", "\(try control.invoke(export: "classify", arguments: [.i32(9)]).first?.description ?? "?")")
+
+        let memory = try WasmInstance(module: try WasmModule.parse(WasmFixtures.memory), host: WASIHost(), limits: tight)
+        check("wasm memory", "123456", "\(try memory.invoke(export: "roundtrip", arguments: [.i32(123456)]).first?.description ?? "?")")
+        check("wasm data segment", "119", "\(try memory.invoke(export: "byte_at", arguments: [.i32(16)]).first?.description ?? "?")")
+
+        var trapped = "no trap"
+        do {
+            _ = try WasmInstance(module: try WasmModule.parse(WasmFixtures.trap), host: WASIHost(), limits: tight)
+                .invoke(export: "divide", arguments: [.i32(0)])
+        } catch let trap as WasmTrap {
+            trapped = trap.message
+        }
+        check("wasm divide by zero", "true", "\(trapped.contains("divide by zero"))")
+
+        var budgetMessage = "no budget stop"
+        do {
+            _ = try WasmInstance(module: try WasmModule.parse(WasmFixtures.spin), host: WASIHost(), limits: tight)
+                .invoke(export: "forever")
+        } catch let trap as WasmTrap {
+            budgetMessage = trap.message
+        }
+        check("wasm instruction budget", "true", "\(budgetMessage.contains("budget"))")
+
+        var malformed = "no error"
+        do {
+            _ = try WasmModule.parse([0x00, 0x61, 0x73])
+        } catch let trap as WasmTrap {
+            malformed = trap.message
+        }
+        check("wasm rejects a short module", "true", "\(malformed.contains("malformed"))")
+    } catch {
+        check("wasm direct calls", "no error", "\(error)")
+    }
+}
+
+// --- a wasm package from the catalog ----------------------------------------
+do {
+    let (engine, _) = makeEngine()
+    checkExit("install wasm package", 0, engine.run("apt install hello-wasm").exitCode)
+    check("wasm package runs", "hello from wasm", engine.run("hello-wasm").output)
+    check("winget sees it", "true", "\(engine.run("winget list wasm").output.contains("Terminal-ios.hello-wasm"))")
+    checkExit("remove wasm package", 0, engine.run("apt remove hello-wasm").exitCode)
+    checkExit("wasm package gone", 127, engine.run("hello-wasm").exitCode)
+}
+
 print("")
 print("checks: \(checks), failures: \(failures)")
 exit(failures == 0 ? 0 : 1)
@@ -358,10 +439,14 @@ def gather_sources() -> list[pathlib.Path]:
     """
     skip = {"URLSessionTransport.swift"}
     files: list[pathlib.Path] = []
-    for sub in ("Shell", "Packages"):
+    for sub in ("Shell", "Packages", "WebAssembly"):
         files.extend(
             sorted(p for p in (ROOT / "Sources" / "Terminal-ios" / sub).glob("*.swift") if p.name not in skip)
         )
+    # The generated wasm fixtures live in the test target but are plain Swift.
+    fixtures = ROOT / "Sources" / "Terminal-iosTests" / "WasmFixtures.swift"
+    if fixtures.exists():
+        files.append(fixtures)
     return files
 
 

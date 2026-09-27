@@ -168,6 +168,17 @@ Engineering rules that follow from the table:
     - `PackageManager` - install/remove/list/search/show/update/refresh/sources
       over every enabled source, in priority order
     - `BundledCatalog.swift` - **generated** by `support/generate_catalog.py`
+  - `Sources/Terminal-ios/WebAssembly/` - the interpreter (L2):
+    - `WasmModule` - binary parser: sections, types, imports, exports, globals,
+      data/element segments, and the LEB128 reader
+    - `WasmInstruction` - decodes a function body once, resolving
+      `if`/`else`/`end` pairings so the executor jumps by instruction index
+    - `WasmInstance` - the stack machine: control flow, memory, tables, the
+      numeric instruction set, plus budgets (instructions, memory pages, call
+      depth)
+    - `WasmWASI` - the WASI subset (`fd_write`/`fd_read`, args, environ, clock,
+      random, `proc_exit`) and nothing else
+    - `WasmRuntime` - parse + run entry points and `wasm info` summaries
   - `Sources/Terminal-ios/History/` - Time Machine snapshot store: local SQLite
     (command + argv, cwd, env, full stdout/stderr, exit code, duration),
     full-text search, re-enter (restore cwd/env), replay-with-edits,
@@ -208,6 +219,8 @@ Engineering rules that follow from the table:
   `expr` `eval` `sh` `source` `.` `which` `type` `command` `help` `man` `version`
 - **packages** - `apt` `apt-get` `apk` `pip` `pip3` `winget`; runtimes declared in the
   catalog: `python3` `python` `py` `gcc` `cc` `clang` `make`
+- **wasm** - `wasm run <module.wasm> [args...]`, `wasm info <module.wasm>`,
+  `wasm --version` (the bundled interpreter)
 - **powershell** - `Get-Location` `Set-Location` `Get-ChildItem` `Get-Item`
   `Get-Content` `Set-Content` `Add-Content` `New-Item` `Remove-Item` `Copy-Item`
   `Move-Item` `Rename-Item` `Test-Path` `Get-PSDrive` `Get-Process` `Get-Command`
@@ -246,6 +259,46 @@ Engineering rules that follow from the table:
   *declared* runtimes: `apt install` reports that the payload is not bundled
   instead of pretending, and the shims say the same. Add `payload` + `sha256`
   when the WASM payloads land.
+
+## WebAssembly engine (Phase 2 foundation)
+
+The engine is what makes MinGW-style tools and CPython possible at all: it is a
+**pure interpreter in Swift**, in-process, with no JIT, no `mmap(PROT_EXEC)` and
+no way to call the OS. That is the only shape App Review accepts for "run code
+that shipped with the app or arrived as a package".
+
+Coverage and limits, as built:
+
+- Instructions: the MVP integer/float set, comparisons, conversions and
+  sign-extension, control flow (`block`/`loop`/`if`/`else`/`br`/`br_if`/
+  `br_table`/`return`/`call`/`call_indirect`), locals/globals, loads and stores
+  of every width, `memory.size`/`memory.grow`, `memory.copy`/`memory.fill`,
+  reference basics (`ref.null`/`ref.func`/`ref.is_null`).
+- Not supported (fails loudly at parse or decode time, never silently): SIMD,
+  threads/atomics, multi-value results, exception handling, tail calls, passive
+  data segments, imported globals and imported memories. The error names the
+  feature, e.g. `unsupported feature: multi-value results`.
+- Safety budgets per call: 20 M instructions, 512 pages (32 MiB) of memory, 512
+  nested calls. A module that loops forever or recurses without bound traps with
+  a readable message instead of hanging the UI thread. `WasmInstance.Limits`
+  shrinks these for tests.
+- WASI is deliberately tiny: `fd_write`, `fd_read`, `fd_close`, `fd_seek`,
+  `fd_fdstat_get`, `args_*`, `environ_*`, `clock_*`, `random_get`,
+  `proc_exit`. There is **no** `path_open`, no sockets and no process spawning,
+  so a downloaded module cannot read the user's files or reach the network;
+  file descriptors are limited to stdout/stderr/stdin.
+- Payload embedding: binary payloads are stored base64 in
+  `BundledCatalog.swift` (`"encoding": "base64"`) and the digest is over the raw
+  bytes, so `PayloadStore.bytes(for:)` verifies text and binary payloads the
+  same way. `PayloadStore.text(for:)` refuses binary entries instead of
+  returning mojibake.
+- Fixtures: `support/wasm_fixtures.py` hand-assembles the test modules (LEB128
+  encodings, block types, iovec layouts, data segments) and **validates each one
+  with Node's WebAssembly implementation before writing it**. The Node results
+  are recorded above each fixture in the generated
+  `Sources/Terminal-iosTests/WasmFixtures.swift` and are exactly what the Swift
+  tests assert. One fixture (`hello-wasm`) is also a real catalog payload, so
+  `apt install hello-wasm` exercises the whole path end to end.
 
 The tree below is what stays after this reset (scene life cycle, launch screen,
 project, CI, tests) - everything else is deleted and rebuilt per the plan above.
@@ -426,7 +479,7 @@ only consumes artifacts produced by CI:
 | ----- | ----- | ------ |
 | 0 | Shell core + command surface + terminal UI | Shell done (~150 commands incl. cmdlets); UI gaps open (ANSI colors, view split) |
 | 1 | Time Machine history (SQLite) | Not started - `Sources/Terminal-ios/History/` does not exist |
-| 2 | Runtimes + package catalogs | Catalog, mirrors, `apt`/`apk`/`pip`/`winget`, digest verification landed; WASM engine + CPython/MinGW payloads still to build |
+| 2 | Runtimes + package catalogs | Catalog, mirrors, `apt`/`apk`/`pip`/`winget`, digest verification and the **WASM interpreter** landed; CPython and MinGW payloads still to build |
 | 3 | Release hardening | Not started |
 
 ### What actually exists
@@ -464,10 +517,11 @@ support/push_via_api.py                       # push path when `git push` is blo
 2. Split `TerminalViewController` into `TerminalTextView` (rendering +
    scrollback) and `AccessoryKeyBar`; the controller already mixes layout with
    execution.
-3. Phase 2 core: the bundled **WASM interpreter** (interpreter mode, no JIT).
-   Everything else - CPython, MinGW-style toolchain, third-party WASM tools -
-   depends on it. Design it so the payload comes from the catalog, not from a
-   hard-coded bundle path.
+3. Phase 2 core: the WASM interpreter landed (see the section above). Next is to
+   make it complete enough for real payloads - build a CPython-for-WASM module,
+   put it in the catalog, and fix whatever the interpreter turns out to be
+   missing (threads and SIMD are out of scope; `dlopen` and `fork` are
+   impossible here by design).
 4. The remote manifest fetcher, once (3) exists: HTTPS + fixed host/path prefix,
    digest-verified, user-initiated only. Keep the injected-transport seam so the
    unit tests stay offline.

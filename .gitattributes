@@ -1,0 +1,7 @@
+# Wasm payloads are binary: never let git normalise their line endings, or the
+# SHA-256 in the catalog would stop matching the file on disk.
+*.wasm binary
+
+# Generated Swift that must stay byte-identical to its generator's output.
+Sources/Terminal-ios/Packages/BundledCatalog.swift -text
+Sources/Terminal-iosTests/WasmFixtures.swift -text

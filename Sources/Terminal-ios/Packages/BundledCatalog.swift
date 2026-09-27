@@ -33,7 +33,8 @@ enum BundledCatalog {
             "demo",
             "script",
             "greeting"
-          ]
+          ],
+          "encoding": "utf8"
         },
         {
           "name": "sysinfo",
@@ -53,7 +54,8 @@ enum BundledCatalog {
             "system",
             "diagnostics",
             "script"
-          ]
+          ],
+          "encoding": "utf8"
         },
         {
           "name": "mkproject",
@@ -73,7 +75,8 @@ enum BundledCatalog {
             "scaffold",
             "script",
             "project"
-          ]
+          ],
+          "encoding": "utf8"
         },
         {
           "name": "backup",
@@ -93,7 +96,8 @@ enum BundledCatalog {
             "backup",
             "script",
             "files"
-          ]
+          ],
+          "encoding": "utf8"
         },
         {
           "name": "sum",
@@ -113,7 +117,29 @@ enum BundledCatalog {
             "text",
             "math",
             "script"
-          ]
+          ],
+          "encoding": "utf8"
+        },
+        {
+          "name": "hello-wasm",
+          "version": "1.0.0",
+          "kind": "wasm",
+          "summary": "greets you from a WebAssembly module run by the bundled interpreter",
+          "provides": [
+            "hello-wasm"
+          ],
+          "payload": "payloads/hello-wasm.wasm",
+          "sha256": "7b8c7c5acceeeaa21d6b80e6975fd81b6387080b6ec54c42e997aa5f955a4db1",
+          "source": "Terminal-ios (hand-assembled fixture)",
+          "license": "MIT",
+          "id": "Terminal-ios.hello-wasm",
+          "publisher": "Terminal-ios",
+          "tags": [
+            "wasm",
+            "demo",
+            "interpreter"
+          ],
+          "encoding": "base64"
         },
         {
           "name": "python-runtime",
@@ -137,7 +163,8 @@ enum BundledCatalog {
             "runtime",
             "python",
             "wasm"
-          ]
+          ],
+          "encoding": null
         },
         {
           "name": "mingw-toolchain",
@@ -161,7 +188,8 @@ enum BundledCatalog {
             "compiler",
             "wasm",
             "mingw"
-          ]
+          ],
+          "encoding": null
         }
       ]
     }
@@ -189,6 +217,9 @@ enum BundledCatalog {
         cp -r "$target" "$dest/$target-$stamp"
         echo "backed up $target -> $dest/$target-$stamp"
 
+        """,
+        "payloads/hello-wasm.wasm":         """
+        AGFzbQEAAAABDAJgBH9/f38Bf2AAAAIjARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAADAgEBBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAEKEAEOAEEBQQBBAUHAABAAGgsLIwIAQQALCBAAAAAQAAAAAEEQCxBoZWxsbyBmcm9tIHdhc20K
         """,
         "payloads/hello.sh":         """
         # hello [name] - greet someone. The smallest possible catalog package.

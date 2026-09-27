@@ -15,6 +15,7 @@ files.
 Run from the repository root:  python support/generate_catalog.py
 """
 
+import base64
 import hashlib
 import json
 import pathlib
@@ -47,15 +48,24 @@ def main() -> int:
         payload = entry.get("payload")
         if not payload:
             entry["sha256"] = None
+            entry["encoding"] = None
             continue
         path = ROOT / "catalog" / payload
         if not path.exists():
             print(f"missing payload: {path}", file=sys.stderr)
             return 1
-        body = path.read_text(encoding="utf-8")
+        raw = path.read_bytes()
+        # Binary payloads (wasm modules) are embedded base64; the digest is over
+        # the raw bytes either way, so verification is identical for both.
+        if payload.endswith(".wasm"):
+            body = base64.b64encode(raw).decode("ascii")
+            entry["encoding"] = "base64"
+        else:
+            body = raw.decode("utf-8")
+            entry["encoding"] = "utf8"
         payloads[payload] = body
-        entry["sha256"] = sha256_hex(body)
-        print(f"{entry['name']:<16} {entry['sha256'][:16]}…  {len(body.encode('utf-8'))}B")
+        entry["sha256"] = hashlib.sha256(raw).hexdigest()
+        print(f"{entry['name']:<16} {entry['sha256'][:16]}…  {len(raw)}B  {entry['encoding']}")
 
     # Write the digests back so catalog.json stays the readable source of truth.
     CATALOG.write_text(
