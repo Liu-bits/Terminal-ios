@@ -359,6 +359,13 @@ that shipped with the app or arrived as a package".
 
 Coverage and limits, as built:
 
+- A trap worth knowing about, because it produced a wrong trap instead of a
+  wrong value: `memory.size` and `memory.grow` each carry a reserved one-byte
+  memory index. Not consuming that immediate makes the *next* byte decode as
+  `unreachable`, so a `memory.size` body traps with "unreachable instruction
+  executed". `WebAssemblyTests.memory` and the local checker's `wasm memory.size`
+  scenarios both guard it now, and the fixture grew a `grow` export so the
+  `memory.grow` path is covered too.
 - Instructions: the MVP integer/float set, comparisons, conversions and
   sign-extension, control flow (`block`/`loop`/`if`/`else`/`br`/`br_if`/
   `br_table`/`return`/`call`/`call_indirect`), locals/globals, loads and stores
@@ -484,7 +491,7 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
   it turns a 12-minute CI round trip into a 40-second loop:
 
   ```bash
-  python support/local_check.py          # 263 scenarios, fails loudly on regressions
+  python support/local_check.py          # 267 scenarios, fails loudly on regressions
   ```
 
   It copies `Shell/`, `Packages/`, `WebAssembly/` and the model half of `Terminal/` into a

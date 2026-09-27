@@ -76,7 +76,13 @@ struct WebAssemblyTests {
         let instance = try instance(WasmFixtures.memory)
         #expect(try instance.invoke(export: "roundtrip", arguments: [.i32(123_456)]).first?.description == "123456")
         #expect(try instance.invoke(export: "byte_at", arguments: [.i32(16)]).first?.description == "119")
+        // `memory.size` and `memory.grow` each carry a reserved memory-index
+        // immediate. Not consuming it made the interpreter run the immediate as
+        // an `unreachable` instruction, so these two lines are the regression
+        // guard for that.
         #expect(try instance.invoke(export: "pages").first?.description == "1")
+        #expect(try instance.invoke(export: "grow").first?.description == "1")
+        #expect(try instance.invoke(export: "pages").first?.description == "2")
         // The data segment landed where the fixture put it.
         #expect(String(decoding: try instance.readMemory(at: 16, count: 5), as: UTF8.self) == "wasm-")
         // Out-of-bounds access traps instead of crashing.

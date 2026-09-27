@@ -255,6 +255,9 @@ struct TerminalScreenTests {
         #expect(output.plainText.contains("a.tx"))
         output.clear()
         #expect(output.plainText.isEmpty)
+        // Go back to a readable width before asserting the text: at four columns
+        // this line wraps, which is correct but is not what is under test here.
+        output.resize(columns: 20)
         output.appendLine("after clear")
         #expect(output.plainText == "after clear")
         output.reset()
@@ -319,7 +322,9 @@ struct TerminalScreenTests {
         // -i highlights the text as written, not as spelled in the pattern.
         let insensitive = engine.run("grep --color=always -i alpha g.txt").output
         #expect(insensitive.contains("\u{1B}[1;38;5;9mALPHA"))
-        #expect(engine.run("grep --color=always -v alpha g.txt").output == "beta")
+        // -v prints every line that does not match, and ALPHA does not match
+        // the lowercase pattern.
+        #expect(engine.run("grep --color=always -v alpha g.txt").output == "beta\nALPHA")
         #expect(engine.run("grep --color=always -n alpha g.txt").output.contains("\u{1B}[38;5;10m1"))
         // A regex pattern must still work when colour is on.
         #expect(engine.run("grep --color=always -E 'a.*a' g.txt").output.contains("alpha"))

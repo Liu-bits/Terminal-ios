@@ -241,7 +241,7 @@ def memory_module() -> bytes:
     return module(
         types=[functype([I32], [I32]), functype([], [I32])],
         imports=[],
-        defined_types=[0, 0, 1],
+        defined_types=[0, 0, 1, 1],
         memories=[memory(1, 4)],
         globals_=[],
         exports=[
@@ -249,11 +249,13 @@ def memory_module() -> bytes:
             export("roundtrip", 0, 0),
             export("byte_at", 0, 1),
             export("pages", 0, 2),
+            export("grow", 0, 3),
         ],
         bodies=[
             body([], code),
             body([], read_string),
-            body([], bytes([0x3F, 0x00])),      # memory.size
+            body([], bytes([0x3F, 0x00])),      # memory.size  (index byte included)
+            body([], bytes([0x41, 0x01, 0x40, 0x00])),   # i32.const 1; memory.grow
         ],
         datas=[data_segment(16, b"wasm-data\n")],
     )
@@ -403,6 +405,10 @@ try {
   if (instance.exports.roundtrip) info.results.roundtrip = instance.exports.roundtrip(123456);
   if (instance.exports.byte_at) info.results.byte0 = instance.exports.byte_at(16);
   if (instance.exports.pages) info.results.pages = instance.exports.pages();
+  if (instance.exports.grow) {
+    try { info.results.grow = instance.exports.grow(); }
+    catch (error) { info.results.growError = String(error); }
+  }
   if (instance.exports.divide) {
     try { info.results.divide = instance.exports.divide(4); } catch (e) { info.results.divideError = String(e.message); }
   }

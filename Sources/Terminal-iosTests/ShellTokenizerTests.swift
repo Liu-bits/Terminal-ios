@@ -1,6 +1,7 @@
 // Copyright © 2026 Liu-bits. All rights reserved.
 
 @testable import Terminal_ios
+import Foundation
 import Testing
 
 struct ShellTokenizerTests {

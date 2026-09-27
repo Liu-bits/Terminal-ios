@@ -391,6 +391,11 @@ do {
         let memory = try WasmInstance(module: try WasmModule.parse(WasmFixtures.memory), host: WASIHost(), limits: tight)
         check("wasm memory", "123456", "\(try memory.invoke(export: "roundtrip", arguments: [.i32(123456)]).first?.description ?? "?")")
         check("wasm data segment", "119", "\(try memory.invoke(export: "byte_at", arguments: [.i32(16)]).first?.description ?? "?")")
+        // memory.size / memory.grow carry a reserved index immediate; missing it
+        // made the interpreter run `unreachable` right after.
+        check("wasm memory.size", "1", "\(try memory.invoke(export: "pages").first?.description ?? "?")")
+        check("wasm memory.grow", "1", "\(try memory.invoke(export: "grow").first?.description ?? "?")")
+        check("wasm memory grew", "2", "\(try memory.invoke(export: "pages").first?.description ?? "?")")
 
         var trapped = "no trap"
         do {
@@ -473,6 +478,8 @@ do {
     check("cursor row/col", "0,6", "\(screen.cursorRow),\(screen.cursorColumn)")
     screen.write("\u{1B}[2J")
     check("erase display", "", screen.plainText)
+    // VT100 homes the cursor on a full erase; programs count on it.
+    check("erase display homes the cursor", "0,0", "\(screen.cursorRow),\(screen.cursorColumn)")
 
     // Scrolling pushes rows into history instead of losing them.
     var scroller = TerminalScreen(columns: 20, rows: 2, scrollbackLimit: 10)

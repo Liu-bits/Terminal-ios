@@ -600,13 +600,24 @@ struct TerminalScreen {
                 grid[row] = Array(repeating: TerminalCell.blank, count: columns)
             }
         case 2:
+            // VT100 homes the cursor when the whole display is erased, and
+            // xterm kept that behaviour; programs rely on it.
             grid = blankGrid()
+            homeCursor()
         case 3:
             grid = blankGrid()
             scrollback = []
+            homeCursor()
         default:
             break
         }
+    }
+
+    /// Cursor to the top-left of the screen.
+    private mutating func homeCursor() {
+        cursorRow = 0
+        cursorColumn = 0
+        pendingWrap = false
     }
 
     private mutating func eraseLine(mode: Int) {

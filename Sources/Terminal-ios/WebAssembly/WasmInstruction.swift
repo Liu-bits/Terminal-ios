@@ -101,8 +101,15 @@ enum WasmInstructionDecoder {
             let align = try reader.readVarUInt32()
             let offset = try reader.readVarUInt32()
             return .store(opcode: opcode, offset: offset)
-        case 0x3F: return .memorySize
-        case 0x40: return .memoryGrow
+        case 0x3F:
+            // Both of these carry a one-byte memory index. Leaving it in the
+            // stream made the next byte decode as `unreachable`, which is how a
+            // plain `memory.size` body turned into a trap.
+            _ = try reader.readVarUInt32()
+            return .memorySize
+        case 0x40:
+            _ = try reader.readVarUInt32()
+            return .memoryGrow
         case 0x41: return .constI32(try reader.readVarInt32())
         case 0x42: return .constI64(try reader.readVarInt64())
         case 0x43:
