@@ -1019,6 +1019,10 @@ do {
 
     checkExit("tar refuses z", 2, engine.run("tar czf x.tar tdir").exitCode)
     checkExit("tar on a missing archive", 1, engine.run("tar tf nope.tar").exitCode)
+    // A file too short to be a header is not a tar, and must not silently
+    // read as an empty archive.
+    engine.run("printf 'garbage' > junk.bin")
+    checkExit("tar refuses a non-tar file", 1, engine.run("tar tf junk.bin").exitCode)
 
     // Hand the archive to the Python cross-checker.
     let crossDirectory = ProcessInfo.processInfo.environment["TERMINAL_CROSS_DIR"]

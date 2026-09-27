@@ -53,6 +53,11 @@ enum TarArchive {
     /// toolchain was not reliable, and an array keeps every offset honest.
     static func parse(_ data: Data) throws -> [Entry] {
         let bytes = [UInt8](data)
+        // An archive needs at least one header block; anything shorter is not
+        // a tar, and returning an empty list would silently accept garbage.
+        guard bytes.count >= blockSize else {
+            throw TarError.unsupportedFormat
+        }
         var entries: [Entry] = []
         var offset = 0
         while offset + blockSize <= bytes.count {

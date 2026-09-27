@@ -33,7 +33,8 @@ struct TarTests {
         #expect(listing.output.contains("tdir/nested/b.txt"))
 
         let verbose = engine.run("tar tf -v cross.tar")
-        #expect(verbose.output.contains("hello tar".utf8.count.description))
+        // `a.txt` holds "hello tar\n", which is 10 bytes.
+        #expect(verbose.output.contains("10"))
 
         #expect(engine.run("mkdir -p out; tar xf cross.tar -C out").exitCode == 0)
         #expect(engine.run("cat out/tdir/a.txt").output == "hello tar")

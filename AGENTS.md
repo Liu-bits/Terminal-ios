@@ -588,7 +588,7 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
   it turns a 12-minute CI round trip into a 40-second loop:
 
   ```bash
-  python support/local_check.py          # 447 scenarios, fails loudly on regressions
+  python support/local_check.py          # 448 scenarios, fails loudly on regressions
   ```
 
   It copies `Shell/`, `Packages/`, `WebAssembly/` and the model half of `Terminal/` into a
