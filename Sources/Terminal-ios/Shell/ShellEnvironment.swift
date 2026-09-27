@@ -20,6 +20,22 @@ struct ShellEnvironment {
         self.variables = variables
     }
 
+    /// Whether commands should emit ANSI colour.
+    ///
+    /// Follows the two conventions tools already implement: `NO_COLOR` (present
+    /// at all) wins, `CLICOLOR` switches colour on unless it is exactly `0`.
+    /// The app exports `CLICOLOR=1`; nothing else does, so captured output
+    /// stays plain by default.
+    var colorEnabled: Bool {
+        if variables.index(forKey: "NO_COLOR") != nil {
+            return false
+        }
+        guard let value = variables["CLICOLOR"] else {
+            return false
+        }
+        return value != "0"
+    }
+
     /// Expands `$VAR` and `${VAR}` in a word. `$$` stays literal.
     ///
     /// The special single-character forms `$?`, `$#`, `$@` and `$$` are

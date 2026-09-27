@@ -425,6 +425,106 @@ do {
     checkExit("wasm package gone", 127, engine.run("hello-wasm").exitCode)
 }
 
+// --- ANSI styles, widths and the screen grid ---------------------------------
+do {
+    let red = TerminalStyle.plain.applying(sgr: [31])
+    check("sgr 31 is palette 1", "true", "\(red.foreground == .palette(1))")
+    check("empty sgr resets", "true", "\(red.applying(sgr: []).isPlain)")
+    check("sgr 1;32;44", "true", "\(TerminalStyle.plain.applying(sgr: [1, 32, 44]) == TerminalStyle(foreground: .palette(2), background: .palette(4), bold: true))")
+    check("sgr bright fg", "true", "\(TerminalStyle.plain.applying(sgr: [91]).foreground == .palette(9))")
+    check("sgr 256 colour", "true", "\(TerminalStyle.plain.applying(sgr: [38, 5, 196]).foreground == .palette(196))")
+    check("sgr truecolor", "true", "\(TerminalStyle.plain.applying(sgr: [38, 2, 10, 20, 30]).foreground == .rgb(10, 20, 30))")
+    check("sgr 22 clears bold", "true", "\(TerminalStyle.plain.applying(sgr: [1, 22]).bold == false)")
+    check("xterm cube", "true", "\(TerminalColor.palette(196).rgb == (255, 0, 0))")
+    check("xterm grey ramp", "true", "\(TerminalColor.palette(232).rgb == (8, 8, 8))")
+    check("sgr round trip", "true", "\(TerminalStyle(foreground: .palette(9), bold: true).sgr == "\u{1B}[1;38;5;9m")")
+
+    let styled = "a\u{1B}[31mRED\u{1B}[0mb"
+    check("segments split", "3", "\(ANSIParser.segments(styled).count)")
+    check("segment style", "true", "\(ANSIParser.segments(styled)[1].style.foreground == .palette(1))")
+    check("strip", "aREDb", ANSIParser.strip(styled))
+    check("visible width", "5", "\(ANSIParser.visibleWidth(styled))")
+    check("cursor escapes are not text", "ab", ANSIParser.strip("a\u{1B}[2Cb"))
+    check("osc is dropped", "ab", ANSIParser.strip("a\u{1B}]0;title\u{07}b"))
+
+    // Width: the reason a Chinese filename keeps `ls -l` aligned.
+    check("wide han", "2", "\(TerminalWidth.of("好"))")
+    check("ascii width", "1", "\(TerminalWidth.of("a"))")
+    check("combining mark", "0", "\(TerminalWidth.of("\u{0301}"))")
+    check("mixed width", "4", "\(TerminalWidth.of("ab好"))")
+    check("width ignores escapes", "4", "\(TerminalWidth.visible(of: "\u{1B}[31mab好\u{1B}[0m"))")
+
+    var screen = TerminalScreen(columns: 10, rows: 3, scrollbackLimit: 10)
+    screen.write("hello")
+    check("grid text", "hello", screen.plainText)
+    screen.write("\rbye")
+    check("carriage return overwrites", "byelo", screen.plainText)
+    screen.write("\u{1B}[K")
+    check("erase to end of line", "bye", screen.plainText)
+    screen.write("\u{1B}[1;6H!")
+    check("cursor addressing", "bye  !", screen.plainText)
+    check("cursor row/col", "0,6", "\(screen.cursorRow),\(screen.cursorColumn)")
+    screen.write("\u{1B}[2J")
+    check("erase display", "", screen.plainText)
+
+    // Scrolling pushes rows into history instead of losing them.
+    var scroller = TerminalScreen(columns: 20, rows: 2, scrollbackLimit: 10)
+    scroller.write("one\ntwo\nthree\nfour")
+    check("scrollback keeps rows", "one\ntwo\nthree\nfour", scroller.plainText)
+    check("scrollback count", "2", "\(scroller.scrollback.count)")
+
+    // Wide characters occupy two cells and the renderer must not draw a gap.
+    var wide = TerminalScreen(columns: 6, rows: 2, scrollbackLimit: 4)
+    wide.write("好a")
+    check("wide advances two cells", "0,3", "\(wide.cursorRow),\(wide.cursorColumn)")
+    check("wide renders once", "好a", wide.plainText)
+    check("wide cells", "2", "\(wide.renderedLines[0].reduce(0) { $0 + $1.text.count })")
+
+    // Colour must survive into the rendered runs.
+    var coloured = TerminalScreen(columns: 40, rows: 4, scrollbackLimit: 4)
+    coloured.write("\u{1B}[34mdir\u{1B}[0m file")
+    let runs = coloured.renderedLines[0]
+    check("two runs", "2", "\(runs.count)")
+    check("first run coloured", "true", "\(runs[0].style.foreground == .palette(4))")
+    check("text is plain", "dir file", coloured.plainText)
+
+    // Unsupported-by-design sequences are recorded, not silently dropped.
+    var region = TerminalScreen(columns: 20, rows: 4, scrollbackLimit: 4)
+    region.write("\u{1B}[1;5r")
+    check("scrolling region recorded", "true", "\(region.unsupported.contains { $0.contains("scrolling region") })")
+
+    // A long line wraps onto the next row.
+    var wrapper = TerminalScreen(columns: 5, rows: 4, scrollbackLimit: 4)
+    wrapper.write("abcdefgh")
+    check("wrap", "abcde\nfgh", wrapper.plainText)
+}
+
+// --- colour switches in ls and grep -----------------------------------------
+do {
+    let (engine, _) = makeEngine()
+    checkExit("colour off by default", 0, engine.run("mkdir -p d; touch d/a.txt").exitCode)
+    check("plain ls", "a.txt", engine.run("ls d").output)
+    engine.run("touch d/photo.png")
+    check("--color=always", "true", "\(engine.run("ls --color=always d").output.contains("\u{1B}[38;5;13mphoto.png"))")
+    check("--color=never", "a.txt\nphoto.png", engine.run("ls --color=never d").output)
+    check("CLICOLOR drives auto", "true", "\(engine.run("export CLICOLOR=1; ls d").output.contains("\u{1B}[38;5;13mphoto.png"))")
+    check("NO_COLOR wins", "a.txt\nphoto.png", engine.run("export NO_COLOR=1; ls d").output)
+    check("directory is blue", "true", "\(engine.run("mkdir -p blue; ls --color=always").output.contains("\u{1B}[1;38;5;12mblue"))")
+    // The execute bit is not something a Windows filesystem round-trips, so
+    // the green-executable rule is asserted by the CI suite on macOS instead.
+    check("archive is red", "true", "\(engine.run("touch d/pack.zip; ls --color=always d").output.contains("\u{1B}[38;5;9mpack.zip"))")
+    let long = engine.run("ls --color=always -l d/pack.zip").output
+    check("ls -l keeps columns plain", "true", "\(long.contains("-rw") && long.contains("\u{1B}[38;5;9mpack.zip"))")
+
+    engine.run("printf 'alpha\\nbeta\\n' > g.txt")
+    check("grep plain", "alpha", engine.run("grep alpha g.txt").output)
+    let hit = engine.run("grep --color=always alpha g.txt").output
+    check("grep highlights", "true", "\(hit.contains("\u{1B}[1;38;5;9malpha"))")
+    check("grep --color=never", "alpha", engine.run("grep --color=never alpha g.txt").output)
+    check("grep -v is not highlighted", "beta", engine.run("grep --color=always -v alpha g.txt").output)
+    check("grep -n paints the number", "true", "\(engine.run("grep --color=always -n alpha g.txt").output.contains("\u{1B}[38;5;10m1"))")
+}
+
 print("")
 print("checks: \(checks), failures: \(failures)")
 exit(failures == 0 ? 0 : 1)
@@ -439,10 +539,15 @@ def gather_sources() -> list[pathlib.Path]:
     """
     skip = {"URLSessionTransport.swift"}
     files: list[pathlib.Path] = []
-    for sub in ("Shell", "Packages", "WebAssembly"):
-        files.extend(
-            sorted(p for p in (ROOT / "Sources" / "Terminal-ios" / sub).glob("*.swift") if p.name not in skip)
-        )
+    for sub in ("Shell", "Packages", "WebAssembly", "Terminal"):
+        for path in sorted((ROOT / "Sources" / "Terminal-ios" / sub).glob("*.swift")):
+            if path.name in skip:
+                continue
+            # The UI half of Term/needs UIKit; the model half (styles, escape
+            # parsing, the grid) is plain Foundation and is compiled here.
+            if "import UIKit" in path.read_text(encoding="utf-8"):
+                continue
+            files.append(path)
     # The generated wasm fixtures live in the test target but are plain Swift.
     fixtures = ROOT / "Sources" / "Terminal-iosTests" / "WasmFixtures.swift"
     if fixtures.exists():

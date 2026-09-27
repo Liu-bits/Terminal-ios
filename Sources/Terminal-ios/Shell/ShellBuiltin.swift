@@ -36,6 +36,23 @@ final class ShellRunContext {
     /// The owning session, so commands such as `read` can consume script input.
     var session: ShellSession?
 
+    /// Whether commands should emit ANSI colour.
+    ///
+    /// Off by default, so pipes, tests and captured output compare plain text.
+    /// The engine turns it on from the environment (`CLICOLOR`), which is the
+    /// switch GNU tools already read - the terminal sets it, `cron` does not.
+    var colorizeOutput = false
+
+    /// Wraps `text` in `style` when colour is on, otherwise returns it as is.
+    func color(_ style: TerminalStyle, _ text: String) -> String {
+        colorizeOutput ? text.styled(style) : text
+    }
+
+    /// Wraps `text` in `style` when `policy` resolves to enabled.
+    func color(_ style: TerminalStyle, _ text: String, policy: ColorPolicy) -> String {
+        policy.isEnabled(self) ? text.styled(style) : text
+    }
+
     init(
         environment: ShellEnvironment,
         stdin: String?,

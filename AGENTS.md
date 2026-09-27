@@ -104,12 +104,12 @@ Engineering rules that follow from the table:
 
 - Phase 0, shell core: UIKit terminal view, accessory key bar, built-in shell
   with pipes/redirection/env vars, then scripts and the coreutils surface.
-  Status: **shell side done, UI polish open.** The engine now dispatches through
-  a built-in table (~120 commands across file/text/system groups) and supports
-  `$(...)`, `$?`/`$#`/`$1`, assignments, `if`/`elif`/`else`, `for`,
-  `while`/`until`, functions, comments and `sh file.sh`. Open: **ANSI SGR color
-  rendering** (output is still one green `UILabel`) and splitting the view into
-  `TerminalTextView` + `AccessoryKeyBar`.
+  Status: **shell side done, one UI refactor open.** The engine dispatches
+  through a built-in table (~120 commands across file/text/system groups) and
+  supports `$(...)`, `$?`/`$#`/`$1`, assignments, `if`/`elif`/`else`, `for`,
+  `while`/`until`, functions, comments and `sh file.sh`. ANSI SGR colour renders
+  through the grid model in `Terminal/` (see below). Open: splitting the view
+  into `TerminalTextView` + `AccessoryKeyBar`.
 - Phase 1, Time Machine history (the differentiator): persist every execution to
   local SQLite as a structured snapshot (command + argv, cwd, env, full
   stdout/stderr, exit code, duration). UI offers a snapshot card stream,
@@ -139,9 +139,14 @@ Engineering rules that follow from the table:
   persistent scrollback, a command input line with a blinking caret, ANSI color
   rendering, and Dynamic Type support; VoiceOver must read new output lines.
 - Source tree (all code is UIKit/Swift, no third-party packages):
-  - `Sources/Terminal-ios/Terminal/` - UI: `TerminalViewController`,
-    `TerminalTextView` (rendering + scrollback), `AccessoryKeyBar`
-    (`Ctrl`/`Esc`/`Tab`/`|`/`/`/`~`), `HistoryCardCell` snapshot card stream.
+  - `Sources/Terminal-ios/Terminal/` - the screen, split in two halves:
+    - model half (plain Foundation, compiled by `support/local_check.py`):
+      `TerminalStyle` + `ANSIParser` (SGR and escape scanning), `TerminalWidth`
+      (East Asian widths), `TerminalScreen` (grid, cursor, scrollback),
+      `TerminalOutput` (what the view controller holds)
+    - UI half (UIKit, CI only): `TerminalViewController`, and the still-to-do
+      `TerminalTextView` (rendering + scrollback), `AccessoryKeyBar`
+      (`Ctrl`/`Esc`/`Tab`/`|`/`/`/`~`), `HistoryCardCell` snapshot card stream.
   - `Sources/Terminal-ios/Shell/` - pure-logic shell core, no UIKit import:
     - `ShellTokenizer`, `ShellParser`, `ShellEnvironment` - words, quoting,
       `$VAR`/`$?`/`$#`/`$1`, pipes, redirection, `&&`/`||`/`;`
@@ -189,7 +194,9 @@ Engineering rules that follow from the table:
     file-system-synchronized group never sees raw `.sh`/`.json` files.
   - `Sources/Terminal-iosTests/` - Swift Testing suites: `ShellEngineTests`,
     `ShellParserTests`, `ShellTokenizerTests`, `BuiltinsTests`,
-    `ShellScriptTests`, `PackageManagerTests`, `TerminalViewControllerTests`.
+    `ShellScriptTests`, `PackageManagerTests`, `TerminalScreenTests`,
+    `WebAssemblyTests`, `PowerShellTests`, `SourcePolicyTests`,
+    `TerminalViewControllerTests`.
 - Needs for Phase 2 (in progress): the bundled WASM interpreter
   (interpreter-mode only, no JIT), the CPython-for-WASM payload behind
   `python3`/`pip`, and the MinGW-style toolchain that targets WASM.
@@ -201,15 +208,19 @@ Engineering rules that follow from the table:
 
 `help` prints the live table, so the count in this doc is only a sanity check:
 
-- CI runs 8 Swift Testing suites (`ShellTokenizer`, `ShellParser`, `ShellEngine`,
-  `Builtins`, `ShellScript`, `PackageManager`, `TerminalViewController`, plus the
-  placeholder UI test target) and they are green as of commit `d6af6cb`.
+- CI runs 11 Swift Testing suites (`ShellTokenizer`, `ShellParser`, `ShellEngine`,
+  `Builtins`, `ShellScript`, `PackageManager`, `TerminalScreen`, `WebAssembly`,
+  `PowerShell`, `SourcePolicy`, `TerminalViewController`, plus the placeholder UI
+  test target). Run `support/local_check.py` before pushing: it catches most of what
+  these suites catch, in 40 seconds instead of 12 minutes.
 
-- **files** - `ls` (`-a -l -d`) `cat` (`-n`) `mkdir` (`-p`) `rmdir` `rm` (`-r -f`)
+- **files** - `ls` (`-a -l -d`, `--color[=auto` `always` `never]`) `cat` (`-n`)
+  `mkdir` (`-p`) `rmdir` `rm` (`-r -f`)
   `cp` (`-r -f`) `mv` `touch` `stat` `ln` (`-s`) `basename` `dirname` `realpath`
   `find` (`-name -type -maxdepth`) `tree` (`-L`) `du` `df` `chmod` (octal and
   `+x`-style) `file` `mktemp`
-- **text** - `echo` (`-n -e`) `printf` `head` `tail` `wc` (`-l -w -c`) `grep` (`-ivnclrE`)
+- **text** - `echo` (`-n -e`) `printf` `head` `tail` `wc` (`-l -w -c`)
+  `grep` (`-ivnclrE`, `--color[=auto` `always` `never]`)
   `sed` (`s///`, `-n`, `Nd`) `sort` (`-nruf`) `uniq` (`-cdu`) `cut` (`-d -f -c`)
   `tr` (`-d -s`, ranges) `tee` (`-a`) `nl` `rev` `tac` `seq` `yes` `base64` (`-d`)
   `sha256sum` `sha1sum` `md5sum` `cksum` `diff` `strings`
@@ -259,6 +270,56 @@ Engineering rules that follow from the table:
   *declared* runtimes: `apt install` reports that the payload is not bundled
   instead of pretending, and the shims say the same. Add `payload` + `sha256`
   when the WASM payloads land.
+
+## Terminal model: escapes, colour, grid (Phase 0 tail)
+
+The UI half is thin on purpose; everything that can be tested without a
+simulator lives in `Sources/Terminal-ios/Terminal/` as plain Foundation code,
+and `support/local_check.py` compiles it on Windows.
+
+- `TerminalStyle` - one run's attributes (bold/dim/italic/underline/blink/
+  reverse/hidden/strikethrough, plus foreground and background as
+  `default` / `palette(0...255)` / `rgb`). `applying(sgr:)` folds an SGR
+  parameter list in, `sgr` renders the style back out, and the xterm palette
+  (0-15 named, 16-231 cube, 232-255 greys) resolves to RGB here.
+- `ANSIParser` - one scanner gives three views of the same stream: `segments`
+  (styled runs for the UI), `strip` (escape-free text for VoiceOver, width
+  maths and tests) and `visibleWidth`. It handles CSI (with private markers and
+  intermediates), OSC terminated by BEL or ST, DCS/PM/APC, and `ESC ( B`
+  charset selection.
+- `TerminalWidth` - East Asian widths, so a Chinese filename does not push
+  `ls -l` out of alignment: CJK/Hangul/emoji are 2 columns, combining marks 0.
+- `TerminalScreen` - a real grid, not a line buffer: cursor addressing
+  (`A B C D E F G d H f`), erasing (`J K X P @`), line editing (`L M S T`),
+  save/restore (`s u`), cursor visibility (`?25h/l`), wrapping, scrolling with
+  scrollback, and wide cells that render once instead of leaving a gap.
+  C0 controls are handled: `\r` overwrites, `\t` goes to the next multiple of
+  eight, `\b` steps back, and `\n` behaves as CR+LF - the `ONLCR` translation a
+  tty would normally do, which this grid has to do itself.
+- Colours reach the view as `[[ANSISegment]]`; `TerminalViewController` maps
+  them to `UIColor`. Palette 0 and 8 would be invisible on black, so they render
+  as greys.
+- **Not supported, and not silently**: the scrolling region (`CSI r`, used by
+  `less`/`vim`) and the alternate screen buffer (`?1049h`). Both are recorded in
+  `TerminalScreen.unsupported` with their sequence and a reason, so a missing
+  feature shows up as data instead of a wrong-looking screen.
+
+Colour policy for commands (`ColorPolicy`, shared by `ls` and `grep`):
+
+| Request | Effect |
+| ------- | ------ |
+| *(none)* / `--color=auto` | colour when `CLICOLOR` is set and non-zero |
+| `--color` / `--color=always` | colour regardless of the environment |
+| `--color=never` | never |
+| `NO_COLOR` set | wins over `CLICOLOR` for `auto` |
+
+The app exports `CLICOLOR=1` (and `TERM=xterm-256color`) in
+`TerminalViewController.viewDidLoad`, so the on-screen terminal is coloured
+while `> file`, scripts and unit tests stay plain - the same rule as a desktop
+shell. `ls` colours by type (directory blue bold, executable green bold, symlink
+cyan, archive red, image magenta) and only the *name*, keeping the mode/size/
+date columns aligned; `grep` highlights matches (bold red), file prefixes
+(magenta) and line numbers (green), and never highlights `-v` output.
 
 ## WebAssembly engine (Phase 2 foundation)
 
@@ -394,16 +455,21 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
   it turns a 12-minute CI round trip into a 40-second loop:
 
   ```bash
-  python support/local_check.py          # 95 scenarios, fails loudly on regressions
+  python support/local_check.py          # 221 scenarios, fails loudly on regressions
   ```
 
-  It copies `Shell/` and `Packages/` into a scratch directory, stubs CryptoKit (Apple-only,
-  so the SHA-256 checks in `PayloadStore` are skipped there), compiles with the Windows
-  Swift toolchain (6.4.0 under `%LOCALAPPDATA%\Programs\Swift`) and runs a scenario list
-  covering built-ins, filters, files, scripts and package installs. Two environment
-  requirements are handled inside the script: the ambient environment carries duplicate
-  proxy variables that abort the Swift runtime, and `SDKROOT` has to point at the Windows
-  SDK. Anything UIKit (the terminal view, VoiceOver) still needs CI.
+  It copies `Shell/`, `Packages/`, `WebAssembly/` and the model half of `Terminal/` into a
+  scratch directory (any file containing `import UIKit` is skipped automatically), stubs
+  CryptoKit (Apple-only, so the SHA-256 checks in `PayloadStore` are skipped there),
+  compiles with the Windows Swift toolchain (6.4.0 under
+  `%LOCALAPPDATA%\Programs\Swift`) and runs a scenario list covering built-ins, filters,
+  files, scripts, package installs, the WASM interpreter, and the ANSI/grid model. Two
+  environment requirements are handled inside the script: the ambient environment carries
+  duplicate proxy variables that abort the Swift runtime, and `SDKROOT` has to point at the
+  Windows SDK. Anything UIKit (the terminal view, VoiceOver) still needs CI.
+
+  One rule is deliberately **not** local, because it needs a real execute bit: `ls --color`
+  painting an executable green is asserted only by the CI suite, on macOS.
 - CI is a single workflow, `.github/workflows/Terminal-ios.yaml`, tracked in the repo
   (the `gh` token now carries the `workflow` scope; the old `.github/` exclude rule is
   gone). Its `test` job runs on every push/PR to `main`; its `build` job is
@@ -473,11 +539,11 @@ only consumes artifacts produced by CI:
 
 ## Progress snapshot (2026-09-26, evening)
 
-### Overall: Phase 0 shell done (UI polish open), Phase 2 surface started, Phases 1/3 not started
+### Overall: Phase 0 shell + colour done (view split open), Phase 2 surface started, Phases 1/3 not started
 
 | Phase | Scope | Status |
 | ----- | ----- | ------ |
-| 0 | Shell core + command surface + terminal UI | Shell done (~150 commands incl. cmdlets); UI gaps open (ANSI colors, view split) |
+| 0 | Shell core + command surface + terminal UI | Shell done (~150 commands incl. cmdlets), ANSI colour + grid model done; only the view split is open |
 | 1 | Time Machine history (SQLite) | Not started - `Sources/Terminal-ios/History/` does not exist |
 | 2 | Runtimes + package catalogs | Catalog, mirrors, `apt`/`apk`/`pip`/`winget`, digest verification and the **WASM interpreter** landed; CPython and MinGW payloads still to build |
 | 3 | Release hardening | Not started |
@@ -500,23 +566,36 @@ Sources/Terminal-ios/
     Catalog.swift                             # manifest + PayloadStore (sha256)
     PackageManager.swift                      # apt/apk/pip backend
     BundledCatalog.swift                      # GENERATED - do not edit
-  Terminal/TerminalViewController.swift
+    SourcePolicy.swift, ManifestFetcher.swift    # mirror allow-list + fetch
+    URLSessionTransport.swift                    # the only URLSession user
+  Terminal/                                      # model half: no UIKit, CI + local_check
+    TerminalStyle.swift, ANSIParser.swift, TerminalWidth.swift,
+    TerminalScreen.swift, TerminalOutput.swift
+    TerminalViewController.swift                 # UI half: UIKit, CI only
+  WebAssembly/
+    WasmModule.swift, WasmInstruction.swift, WasmInstance.swift,
+    WasmWASI.swift, WasmRuntime.swift
 Sources/Terminal-iosTests/
-  ShellEngineTests, ShellParserTests, ShellTokenizerTests,
-  BuiltinsTests, ShellScriptTests, PackageManagerTests, TerminalViewControllerTests
+  ShellEngineTests, ShellParserTests, ShellTokenizerTests, BuiltinsTests,
+  ShellScriptTests, PackageManagerTests, TerminalScreenTests, WebAssemblyTests,
+  PowerShellTests, SourcePolicyTests, TerminalViewControllerTests, WasmFixtures
 Sources/Terminal-iosUITests/AppUITests.swift
-catalog/catalog.json + catalog/payloads/*.sh  # package source of truth
-support/generate_catalog.py                   # regenerates BundledCatalog.swift
-support/push_via_api.py                       # push path when `git push` is blocked
+catalog/catalog.json + catalog/payloads/*             # package source of truth
+support/generate_catalog.py                          # regenerates BundledCatalog.swift
+support/wasm_fixtures.py                             # hand-assembled wasm, Node-validated
+support/local_check.py                               # local build + scenario runner
+support/push_via_api.py                              # push path when `git push` is blocked
 ```
 
 ### Open items, in the order they should be picked up
 
-1. ANSI SGR color rendering - output is a single green `UILabel`, so `\e[31m`
-   and friends are dropped. This blocks any colored `ls` or program output.
-2. Split `TerminalViewController` into `TerminalTextView` (rendering +
+1. Split `TerminalViewController` into `TerminalTextView` (rendering +
    scrollback) and `AccessoryKeyBar`; the controller already mixes layout with
-   execution.
+   execution. The screen model it draws is done and tested, so this is a straight
+   refactor with no behaviour change.
+2. The scrolling region and the alternate screen buffer (`CSI r`, `?1049h`) are
+   recorded as unsupported. Implementing them is what `less`/`vim` need; do it in
+   `TerminalScreen.apply` and add scenarios next to the existing ones.
 3. Phase 2 core: the WASM interpreter landed (see the section above). Next is to
    make it complete enough for real payloads - build a CPython-for-WASM module,
    put it in the catalog, and fix whatever the interpreter turns out to be

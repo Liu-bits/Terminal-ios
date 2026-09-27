@@ -84,7 +84,11 @@ enum FileBuiltins {
         return formatter.string(from: date)
     }
 
-    private static func longLine(for url: URL, name: String) -> String {
+    private static func longLine(
+        for url: URL,
+        name: String,
+        style: TerminalStyle? = nil
+    ) -> String {
         let attributes = (try? FileManager.default.attributesOfItem(atPath: url.path)) ?? [:]
         let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0o644
         var isDir: ObjCBool = false
@@ -96,14 +100,52 @@ enum FileBuiltins {
         if sizeText.count < 8 {
             sizeText = String(repeating: " ", count: 8 - sizeText.count) + sizeText
         }
-        return "\(modes) \(sizeText) \(timestamp(modified)) \(name)"
+        // Only the name is coloured, so the mode/size/date columns stay aligned.
+        let shown = style.map { name.styled($0) } ?? name
+        return "\(modes) \(sizeText) \(timestamp(modified)) \(shown)"
     }
+
+    /// The colour `ls` gives an entry, or `nil` for a plain file.
+    ///
+    /// Mirrors the `LS_COLORS` defaults people expect: directories blue,
+    /// executables green, symlinks cyan, archives red, images magenta.
+    private static func style(forName name: String, url: URL) -> TerminalStyle? {
+        let attributes = (try? FileManager.default.attributesOfItem(atPath: url.path)) ?? [:]
+        if (attributes[.type] as? FileAttributeType) == .typeSymbolicLink {
+            return .symlink
+        }
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            return .directory
+        }
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
+        if permissions & 0o111 != 0 {
+            return .executable
+        }
+        let lower = name.lowercased()
+        if archiveExtensions.contains(where: { lower.hasSuffix($0) }) {
+            return .archive
+        }
+        if imageExtensions.contains(where: { lower.hasSuffix($0) }) {
+            return .image
+        }
+        return nil
+    }
+
+    private static let archiveExtensions = [
+        ".zip", ".tar", ".gz", ".tgz", ".bz2", ".tbz", ".xz", ".txz", ".7z", ".rar", ".zst"
+    ]
+    private static let imageExtensions = [
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".svg", ".bmp", ".tiff"
+    ]
 
     private static func ls(_ args: [String], _ context: ShellRunContext) -> ShellResult {
         let parsed = ShellArgs.parse(args)
         let showAll = parsed.has("a")
         let long = parsed.has("l")
         let directoriesOnly = parsed.has("d")
+        let policy = ColorPolicy.from(parsed)
+        let colour = policy.isEnabled(context)
         let targets = parsed.operands.isEmpty ? ["~"] : parsed.operands
         var lines: [String] = []
 
@@ -123,19 +165,25 @@ enum FileBuiltins {
                 names.sort()
                 if targets.count > 1 {
                     if !lines.isEmpty { lines.append("") }
-                    lines.append("\(target):")
+                    lines.append(context.color(.directory, "\(target):", policy: policy))
                 }
                 for name in names {
+                    let child = url.appendingPathComponent(name)
+                    let style = colour ? style(forName: name, url: child) : nil
                     if long {
-                        lines.append(longLine(for: url.appendingPathComponent(name), name: name))
+                        lines.append(longLine(for: child, name: name, style: style))
                     } else {
-                        lines.append(name)
+                        lines.append(style.map { name.styled($0) } ?? name)
                     }
                 }
-            } else if long {
-                lines.append(longLine(for: url, name: url.lastPathComponent))
             } else {
-                lines.append(url.lastPathComponent)
+                let name = url.lastPathComponent
+                let style = colour ? style(forName: name, url: url) : nil
+                if long {
+                    lines.append(longLine(for: url, name: name, style: style))
+                } else {
+                    lines.append(style.map { name.styled($0) } ?? name)
+                }
             }
         }
         return .ok(lines.joined(separator: "\n"))

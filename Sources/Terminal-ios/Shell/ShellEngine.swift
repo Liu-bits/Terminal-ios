@@ -458,6 +458,7 @@ final class ShellEngine {
             self?.resolveCommand(command)
         }
         context.session = session
+        context.colorizeOutput = session.environment.colorEnabled
         return context
     }
 

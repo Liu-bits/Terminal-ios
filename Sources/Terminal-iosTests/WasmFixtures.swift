@@ -20,7 +20,7 @@ enum WasmFixtures {
     /// Node result: {"classify0": 10, "classify1": 20, "classify9": 30, "fib10": 55, "fib20": 6765}
     static let controlflow: [UInt8] = decode("AGFzbQEAAAABBgFgAX8BfwMDAgAABxICA2ZpYgAACGNsYXNzaWZ5AAEKVAI3AQV/QQAhAkEBIQNBACEEAkADQCAEIABODQEgAiADaiEFIAMhAiAFIQMgBEEBaiEEDAALCyACCxoAAkACQAJAIAAOAgABAgtBCg8LQRQPC0EeCw==")
     /// Node result: {"byte0": 119, "pages": 1, "roundtrip": 123456}
-    static let memory: [UInt8] = decode("AGFzbQEAAAABBgFgAX8BfwMEAwAAAAUEAQEBBAcoBAZtZW1vcnkCAAlyb3VuZHRyaXAAAAdieXRlX2F0AAEFcGFnZXMAAgodAw4AQQAgADYCAEEAKAIACwcAIAAtAAALBAA/AAsLEAEAQRALCndhc20tZGF0YQo=")
+    static let memory: [UInt8] = decode("AGFzbQEAAAABCgJgAX8Bf2AAAX8DBAMAAAEFBAEBAQQHKAQGbWVtb3J5AgAJcm91bmR0cmlwAAAHYnl0ZV9hdAABBXBhZ2VzAAIKHQMOAEEAIAA2AgBBACgCAAsHACAALQAACwQAPwALCxABAEEQCwp3YXNtLWRhdGEK")
     /// Node result: {}
     static let spin: [UInt8] = decode("AGFzbQEAAAABBAFgAAADAgEABwsBB2ZvcmV2ZXIAAAoJAQcAA0AMAAsL")
     /// Node result: {"divide": 50}

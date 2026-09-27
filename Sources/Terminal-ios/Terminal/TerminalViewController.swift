@@ -2,18 +2,33 @@
 
 import UIKit
 
-/// Dark phosphor-on-black terminal screen: scrollback, input line with a
-/// blinking caret, and a mobile accessory key bar.
+/// Dark phosphor-on-black terminal screen: ANSI-coloured scrollback, an input
+/// line with a blinking caret, and a mobile accessory key bar.
+///
+/// The view is deliberately thin. Everything that can be tested without a
+/// simulator lives elsewhere: the shell in `Shell/`, the escape-sequence and
+/// grid handling in `Terminal/`. This file only turns styled runs into an
+/// attributed string and forwards input to the engine.
 final class TerminalViewController: UIViewController {
 
     let engine = ShellEngine()
+
+    /// Scrollback, grid and cursor. The screen model is what makes progress
+    /// bars, cursor addressing and colour behave like a real terminal.
+    private(set) var output = TerminalOutput()
 
     private let scrollView = UIScrollView()
     let outputLabel = UILabel()
     private let promptLabel = UILabel()
     let inputField = UITextField()
     private let keyBar = UIStackView()
-    private var outputLines: [String] = []
+
+    /// The default foreground: phosphor green, used wherever a program leaves
+    /// the colour alone.
+    private let baseColor = UIColor(red: 0.2, green: 1.0, blue: 0.35, alpha: 1.0)
+    private var outputFont: UIFont {
+        UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -21,6 +36,13 @@ final class TerminalViewController: UIViewController {
         overrideUserInterfaceStyle = .dark
         view.backgroundColor = UIColor.black
         title = "Terminal-ios"
+
+        // Tell the shell it is talking to a terminal. GNU tools read CLICOLOR,
+        // so `ls` and `grep` colour their output here while `> file` stays
+        // plain - the same rule as on a desktop.
+        engine.environment.variables["CLICOLOR"] = "1"
+        engine.environment.variables["TERM"] = "xterm-256color"
+        engine.environment.variables["COLUMNS"] = "80"
 
         setupOutput()
         setupPromptRow()
@@ -35,14 +57,19 @@ final class TerminalViewController: UIViewController {
         inputField.becomeFirstResponder()
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        syncColumnsToWidth()
+    }
+
     // MARK: - Setup
 
     private var promptRow: UIStackView?
 
     private func setupOutput() {
         outputLabel.numberOfLines = 0
-        outputLabel.font = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-        outputLabel.textColor = UIColor(red: 0.2, green: 1.0, blue: 0.35, alpha: 1.0)
+        outputLabel.font = outputFont
+        outputLabel.textColor = baseColor
         outputLabel.adjustsFontForContentSizeCategory = true
         outputLabel.translatesAutoresizingMaskIntoConstraints = false
         outputLabel.accessibilityIdentifier = "terminalOutput"
@@ -55,13 +82,13 @@ final class TerminalViewController: UIViewController {
     private func setupPromptRow() {
         promptLabel.text = "$"
         promptLabel.font = UIFont.monospacedSystemFont(ofSize: 14, weight: .bold)
-        promptLabel.textColor = outputLabel.textColor
+        promptLabel.textColor = baseColor
         promptLabel.setContentHuggingPriority(.required, for: .horizontal)
         promptLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        inputField.font = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        inputField.font = outputFont
         inputField.textColor = UIColor.white
-        inputField.tintColor = outputLabel.textColor
+        inputField.tintColor = baseColor
         inputField.autocapitalizationType = .none
         inputField.autocorrectionType = .no
         inputField.spellCheckingType = .no
@@ -145,8 +172,8 @@ final class TerminalViewController: UIViewController {
     }
 
     func submit(_ line: String) {
-        appendLine("$ \(line)")
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        appendLine("$ \(line)")
         if trimmed == "help" {
             // Rendered from the live command table so the list cannot drift.
             appendLine(ShellBuiltins.helpText())
@@ -157,9 +184,8 @@ final class TerminalViewController: UIViewController {
         }
         let result = engine.run(line)
         if result.clearScreen {
-            outputLines = []
-            outputLabel.text = ""
-            outputLabel.accessibilityValue = ""
+            output.reset()
+            render()
             return
         }
         if !result.output.isEmpty {
@@ -170,18 +196,147 @@ final class TerminalViewController: UIViewController {
         }
     }
 
+    // MARK: - Rendering
+
     private func appendLine(_ text: String) {
-        outputLines.append(text)
-        if outputLines.count > 500 {
-            outputLines.removeFirst(outputLines.count - 500)
+        output.appendLine(text)
+        render(text)
+    }
+
+    private func render(announcing announcement: String? = nil) {
+        outputLabel.attributedText = attributedOutput()
+        // VoiceOver must not read escape sequences aloud, and it should hear the
+        // new chunk rather than the whole scrollback.
+        if let announcement {
+            let spoken = ANSIParser.strip(announcement)
+            outputLabel.accessibilityValue = spoken
+            UIAccessibility.post(notification: .announcement, argument: spoken)
+        } else {
+            outputLabel.accessibilityValue = output.plainText
         }
-        outputLabel.text = outputLines.joined(separator: "\n")
-        // VoiceOver reads new output as it arrives.
-        outputLabel.accessibilityValue = text
-        UIAccessibility.post(notification: .announcement, argument: text)
         view.layoutIfNeeded()
         let bottom = CGPoint(x: 0, y: max(0, scrollView.contentSize.height - scrollView.bounds.height))
         scrollView.setContentOffset(bottom, animated: true)
+    }
+
+    private func attributedOutput() -> NSAttributedString {
+        let font = outputFont
+        let attributed = NSMutableAttributedString()
+        let newline = NSAttributedString(
+            string: "\n",
+            attributes: [.font: font, .foregroundColor: baseColor]
+        )
+        for (index, line) in output.renderedLines.enumerated() {
+            if index > 0 {
+                attributed.append(newline)
+            }
+            for segment in line {
+                attributed.append(
+                    NSAttributedString(
+                        string: segment.text,
+                        attributes: attributes(for: segment.style, font: font)
+                    )
+                )
+            }
+        }
+        return attributed
+    }
+
+    private func attributes(
+        for style: TerminalStyle,
+        font: UIFont
+    ) -> [NSAttributedString.Key: Any] {
+        var attributes: [NSAttributedString.Key: Any] = [:]
+        attributes[.font] = style.bold
+            ? UIFont.monospacedSystemFont(ofSize: font.pointSize, weight: .bold)
+            : font
+
+        var foreground = color(for: style.foreground, fallback: baseColor)
+        var background: UIColor? = style.background == .default
+            ? nil
+            : color(for: style.background, fallback: nil)
+        if style.reverse {
+            let swapped = foreground
+            foreground = background ?? UIColor.black
+            background = swapped
+        }
+        if style.dim {
+            foreground = foreground.withAlphaComponent(0.6)
+        }
+        if style.hidden {
+            foreground = UIColor.clear
+        }
+        attributes[.foregroundColor] = foreground
+        if let background {
+            attributes[.backgroundColor] = background
+        }
+        if style.underline {
+            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+        }
+        if style.strikethrough {
+            attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+            attributes[.strikethroughColor] = foreground
+        }
+        if style.italic {
+            // The monospaced system font ships no italic face, so lean it.
+            attributes[.obliqueness] = 0.18
+        }
+        return attributes
+    }
+
+    /// Maps a terminal colour onto a `UIColor`.
+    ///
+    /// Two adjustments keep the output readable on a black background: the
+    /// palette's black and bright-black entries would be invisible, so they
+    /// become greys.
+    private func color(for terminalColor: TerminalColor, fallback: UIColor?) -> UIColor {
+        switch terminalColor {
+        case .default:
+            return fallback ?? baseColor
+        case .palette(let index):
+            if index == 0 {
+                return UIColor(white: 0.25, alpha: 1.0)
+            }
+            if index == 8 {
+                return UIColor(white: 0.55, alpha: 1.0)
+            }
+            let rgb = terminalColor.rgb
+            return UIColor(
+                red: CGFloat(rgb.r) / 255,
+                green: CGFloat(rgb.g) / 255,
+                blue: CGFloat(rgb.b) / 255,
+                alpha: 1.0
+            )
+        case .rgb:
+            let rgb = terminalColor.rgb
+            return UIColor(
+                red: CGFloat(rgb.r) / 255,
+                green: CGFloat(rgb.g) / 255,
+                blue: CGFloat(rgb.b) / 255,
+                alpha: 1.0
+            )
+        }
+    }
+
+    /// Feeds the measured width back to the screen so wrapping matches the view.
+    private func syncColumnsToWidth() {
+        let available = scrollView.bounds.width
+        guard available > 0 else {
+            return
+        }
+        let characterWidth = ("0" as NSString)
+            .size(withAttributes: [.font: outputFont])
+            .width
+        guard characterWidth > 0 else {
+            return
+        }
+        let columns = max(20, Int(available / characterWidth))
+        guard columns != output.screen.columns else {
+            return
+        }
+        output.resize(columns: columns)
+        engine.environment.variables["COLUMNS"] = "\(columns)"
+        render()
     }
 }
 

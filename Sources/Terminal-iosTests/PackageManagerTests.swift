@@ -29,14 +29,25 @@ struct PackageManagerTests {
         #expect(manager.catalog.entries.count >= 5)
         #expect(manager.catalog.providedCommands.contains("hello"))
         for entry in manager.catalog.entries where entry.payload != nil {
-            switch PayloadStore.text(for: entry) {
-            case .success(let body):
-                #expect(body.isEmpty == false)
+            // Every payload verifies as bytes; text entries additionally decode
+            // as UTF-8. Binary entries (wasm) must refuse `text(for:)` instead
+            // of handing back mojibake.
+            switch PayloadStore.bytes(for: entry) {
+            case .success(let data):
+                #expect(data.isEmpty == false)
                 #expect(entry.sha256?.isEmpty == false)
+                switch PayloadStore.text(for: entry) {
+                case .success(let body):
+                    #expect(body.isEmpty == false)
+                case .failure(let reason):
+                    #expect(entry.encoding == "base64", "text payload failed: \(reason)")
+                }
             case .failure(let reason):
                 Issue.record("payload failed to verify: \(reason)")
             }
         }
+        // At least one binary payload exists, so the base64 path is covered.
+        #expect(manager.catalog.entries.contains { $0.encoding == "base64" })
     }
 
     @Test("installing a script package writes a shim and marks it installed")

@@ -235,10 +235,13 @@ def memory_module() -> bytes:
         0x20, 0x00,              # local.get 0 (offset inside the data)
         0x2D, 0x00, 0x00,        # i32.load8_u offset=0
     ])
+    # `pages` takes no parameters - JS pads a missing argument with 0, so the
+    # old (I32) -> I32 signature passed under Node while a real caller with
+    # correct arity checking traps. Declare it as () -> I32.
     return module(
-        types=[functype([I32], [I32])],
+        types=[functype([I32], [I32]), functype([], [I32])],
         imports=[],
-        defined_types=[0, 0, 0],
+        defined_types=[0, 0, 1],
         memories=[memory(1, 4)],
         globals_=[],
         exports=[

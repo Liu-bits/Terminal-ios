@@ -211,6 +211,37 @@ enum TextBuiltins {
 
     // MARK: - grep
 
+    /// Wraps every match of `pattern` in `style`.
+    ///
+    /// Both grep modes go through `NSRegularExpression`: the plain mode escapes
+    /// the pattern first. Using the template form keeps the original text
+    /// intact, which matters under `-i` - the match is highlighted as written,
+    /// not as spelled in the pattern.
+    private static func highlight(
+        _ line: String,
+        pattern: String,
+        ignoreCase: Bool,
+        extended: Bool,
+        style: TerminalStyle
+    ) -> String {
+        let source = extended ? pattern : NSRegularExpression.escapedPattern(for: pattern)
+        var options: NSRegularExpression.Options = []
+        if ignoreCase {
+            options.insert(.caseInsensitive)
+        }
+        guard let expression = try? NSRegularExpression(pattern: source, options: options) else {
+            return line
+        }
+        let range = NSRange(line.startIndex..<line.endIndex, in: line)
+        let template = style.sgr + "$0" + TerminalStyle.plain.sgr
+        return expression.stringByReplacingMatches(
+            in: line,
+            options: [],
+            range: range,
+            withTemplate: template
+        )
+    }
+
     private static func grep(_ args: [String], _ context: ShellRunContext) -> ShellResult {
         let parsed = ShellArgs.parse(args)
         guard let pattern = parsed.operands.first else {
@@ -223,6 +254,8 @@ enum TextBuiltins {
         let countOnly = parsed.has("c")
         let filesOnly = parsed.has("l")
         let extended = parsed.has("E")
+        let policy = ColorPolicy.from(parsed)
+        let colour = policy.isEnabled(context)
 
         func matcher(_ line: String) -> Bool {
             let options: String.CompareOptions = ignoreCase ? [.caseInsensitive] : []
@@ -230,6 +263,20 @@ enum TextBuiltins {
                 return line.range(of: pattern, options: options.union(.regularExpression)) != nil
             }
             return line.range(of: pattern, options: options) != nil
+        }
+
+        /// The line with every match wrapped in the highlight style. Inverted
+        /// output and non-matching lines come back untouched, because a
+        /// highlight there would mark the wrong text.
+        func highlighted(_ line: String) -> String {
+            guard colour, !invert else { return line }
+            return highlight(
+                line,
+                pattern: pattern,
+                ignoreCase: ignoreCase,
+                extended: extended,
+                style: .matchHighlight
+            )
         }
 
         /// Greps one text blob and returns the rendered lines.
@@ -241,9 +288,12 @@ enum TextBuiltins {
                 guard hit != invert else { continue }
                 matches += 1
                 if showNumbers && !countOnly && !filesOnly {
-                    results.append("\(index + 1):\(line)")
+                    // GNU's `ln=` colour, and only the number is coloured so a
+                    // copy/paste of the line still works.
+                    let number = context.color(.lineNumber, "\(index + 1)", policy: policy)
+                    results.append("\(number):\(highlighted(line))")
                 } else if !countOnly && !filesOnly {
-                    results.append(line)
+                    results.append(highlighted(line))
                 }
             }
             return (results, matches)
@@ -270,7 +320,8 @@ enum TextBuiltins {
                     } else if countOnly {
                         output.append("\(display):\(outcome.matches)")
                     } else {
-                        output.append(contentsOf: outcome.lines.map { "\(display):\($0)" })
+                        let tag = context.color(.fileName, display, policy: policy)
+                        output.append(contentsOf: outcome.lines.map { "\(tag):\($0)" })
                     }
                 }
                 continue
@@ -286,7 +337,8 @@ enum TextBuiltins {
             } else if filesOnly {
                 if outcome.matches > 0 { output.append(file) }
             } else if files.count > 1 {
-                output.append(contentsOf: outcome.lines.map { "\(file):\($0)" })
+                let tag = context.color(.fileName, file, policy: policy)
+                output.append(contentsOf: outcome.lines.map { "\(tag):\($0)" })
             } else {
                 output.append(contentsOf: outcome.lines)
             }
