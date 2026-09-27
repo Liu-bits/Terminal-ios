@@ -24,6 +24,7 @@ enum TimeMachineBuiltin {
       tm replay <id>           run the same command again
       tm pin <id> [label]      pin a snapshot as an action card
       tm unpin <id>            unpin it
+      tm browse                browse snapshots with keys (j/k, ⏎ open, x delete)
       tm export [file]         plain-text dump
       tm clear                 delete every snapshot
     ids are unique prefixes, as printed by `tm list`
@@ -77,6 +78,8 @@ enum TimeMachineBuiltin {
             // Every run is recorded, including this one, which is why the list is
             // not empty the moment after a clear.
             return .ok("Cleared \(count) snapshot(s). This run is recorded as the first new one.")
+        case "browse":
+            return browse(context)
         case "help", "--help":
             return .ok(usage)
         default:
@@ -214,6 +217,33 @@ enum TimeMachineBuiltin {
             return .ok("Unpinned \(entry.shortID).")
         }
         return .ok("Pinned \(entry.shortID)\(label.map { " as '\($0)'" } ?? "").")
+    }
+
+    /// An interactive browser over the snapshots.
+    private static func browse(_ context: ShellRunContext) -> ShellResult {
+        let store = context.snapshots
+        let session = SnapshotBrowserSession(
+            read: { store.entries() },
+            columns: context.terminalColumns,
+            rows: context.terminalRows,
+            replay: { entry in context.evaluate(entry.command).output },
+            delete: { entry in store.delete(id: entry.id) },
+            pin: { entry, pinned in
+                var updated = entry
+                updated.pinned = pinned
+                updated.title = pinned ? entry.title : nil
+                store.update(updated)
+            }
+        )
+        guard context.interactive else {
+            return .ok(session.plainList())
+        }
+        return ShellResult(
+            output: session.initialFrame,
+            exitCode: 0,
+            clearScreen: false,
+            session: session
+        )
     }
 
     private static func export(_ store: HistoryStore, path: String?, _ context: ShellRunContext) -> ShellResult {

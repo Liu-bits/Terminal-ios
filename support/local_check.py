@@ -934,6 +934,65 @@ do {
     }
 }
 
+// --- tm browse ---------------------------------------------------------------
+do {
+    let (engine, _) = makeEngine()
+    engine.run("echo alpha")
+    engine.run("nosuchcmd")
+    engine.environment.variables["LINES"] = "8"
+    engine.environment.variables["COLUMNS"] = "60"
+
+    // Without a screen it prints the list once.
+    check("browse lists snapshots", "true", "\(engine.run("tm browse").output.contains("snapshot"))")
+    check("browse shows a command", "true", "\(engine.run("tm browse").output.contains("echo alpha"))")
+
+    if case .interactive(let session) = engine.runInteractive("tm browse") {
+        check("browse opens a session", "true", "\(session.initialFrame.contains("tm browse"))")
+        check("browse is key driven", "key", "\(session.inputMode)")
+        check("browse hints its keys", "true", "\(stepText(session.handle(key: "z")).contains("delete"))")
+
+        // j moves, Enter opens the snapshot, Esc goes back.
+        _ = session.handle(key: "j")
+        let opened = session.handle(key: InteractiveKey.enter)
+        check("enter opens a snapshot", "true", "\(ANSIParser.strip(stepText(opened)).contains("exit"))")
+        check("open view can scroll", "true", "\(isFinished(session.handle(key: "j")) == false)")
+        _ = session.handle(key: InteractiveKey.escape)
+        check("esc returns to the list", "true", "\(ANSIParser.strip(stepText(session.handle(key: "z"))).contains("snapshot"))")
+
+        // Search narrows and says how many it found.
+        _ = session.handle(key: "/")
+        _ = session.handle(key: "a")
+        _ = session.handle(key: "l")
+        let searched = session.handle(key: InteractiveKey.enter)
+        check("search reports matches", "true", "\(ANSIParser.strip(stepText(searched)).contains("match"))")
+
+        // Pin toggles, and says which way.
+        let pinned = session.handle(key: "p")
+        check("p pins the selection", "true", "\(ANSIParser.strip(stepText(pinned)).contains("Pinned"))")
+
+        // Delete asks first, and `n` cancels. Counts are compared rather than
+        // hardcoded: every `tm browse` run is itself recorded as a snapshot.
+        let beforeCancel = engine.snapshots.entries().count
+        let asked = session.handle(key: "x")
+        check("x asks before deleting", "true", "\(ANSIParser.strip(stepText(asked)).contains("delete"))")
+        let cancelled = session.handle(key: "n")
+        check("n cancels the delete", "true", "\(ANSIParser.strip(stepText(cancelled)).contains("cancelled"))")
+        check("cancelling deletes nothing", "\(beforeCancel)", "\(engine.snapshots.entries().count)")
+
+        // `y` really deletes.
+        let beforeDelete = engine.snapshots.entries().count
+        _ = session.handle(key: "x")
+        let deleted = session.handle(key: "y")
+        check("y deletes the snapshot", "true", "\(ANSIParser.strip(stepText(deleted)).contains("Deleted"))")
+        check("one snapshot fewer", "\(beforeDelete - 1)", "\(engine.snapshots.entries().count)")
+
+
+        check("q quits", "true", "\(isFinished(session.handle(key: "q")))")
+    } else {
+        check("browse opens a session", "interactive", "finished")
+    }
+}
+
 print("")
 print("checks: \(checks), failures: \(failures)")
 exit(failures == 0 ? 0 : 1)

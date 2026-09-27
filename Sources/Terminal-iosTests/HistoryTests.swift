@@ -17,6 +17,20 @@ struct HistoryTests {
         return (engine, root)
     }
 
+    /// Text carried by an interactive step, whichever kind it is.
+    private func text(_ step: InteractiveStep) -> String {
+        switch step {
+        case .frame(let text), .append(let text), .finished(let text, _):
+            return text
+        }
+    }
+
+    /// The text as a reader sees it: escapes removed, which matters because the
+    /// browser's status line is drawn in reverse video.
+    private func plain(_ step: InteractiveStep) -> String {
+        ANSIParser.strip(text(step))
+    }
+
     // MARK: - Recording
 
     @Test("Every top-level line becomes a snapshot")
@@ -218,6 +232,44 @@ struct HistoryTests {
         } else {
             Issue.record("tm page should take the screen at the top level")
         }
+    }
+
+    @Test("tm browse lists, opens, searches, pins and deletes")
+    func tmBrowse() throws {
+        let (engine, _) = makeEngine()
+        engine.run("echo alpha")
+        engine.run("nosuchcmd")
+
+        #expect(engine.run("tm browse").output.contains("echo alpha"))
+
+        guard case .interactive(let session) = engine.runInteractive("tm browse") else {
+            Issue.record("tm browse should take the screen")
+            return
+        }
+        #expect(session.inputMode == .key)
+        #expect(session.initialFrame.contains("tm browse"))
+
+        // Enter opens a snapshot; Esc goes back to the list.
+        #expect(plain(session.handle(key: InteractiveKey.enter)).contains("exit"))
+        #expect(plain(session.handle(key: InteractiveKey.escape)).contains("snapshot"))
+
+        // Search, then a pin toggle.
+        session.handle(key: "/")
+        session.handle(key: "a")
+        #expect(plain(session.handle(key: InteractiveKey.enter)).contains("match"))
+        #expect(plain(session.handle(key: "p")).contains("Pinned"))
+
+        // Delete asks first, `n` cancels, `y` removes it.
+        #expect(plain(session.handle(key: "x")).contains("delete"))
+        #expect(plain(session.handle(key: "n")).contains("cancelled"))
+        session.handle(key: "x")
+        #expect(plain(session.handle(key: "y")).contains("Deleted"))
+
+        guard case .finished(_, let code) = session.handle(key: "q") else {
+            Issue.record("q should quit the browser")
+            return
+        }
+        #expect(code == 0)
     }
 
     @Test("tm clear drops the old snapshots and records itself")

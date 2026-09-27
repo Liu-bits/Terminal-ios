@@ -203,6 +203,8 @@ Engineering rules that follow from the table:
     - `HistoryStore` - the protocol, plus `MemoryHistoryStore` (tests) and
       `JSONHistoryStore` (one file under the sandbox root, reloaded per
       operation so two instances cannot disagree)
+    - `SnapshotBrowser` - `tm browse`: the card stream, done on the terminal
+      until the UI has one, and the pure-logic half either way
     - `HistorySearch` - `HistoryFilter` and ranked search: a command match
       outranks an output match, a word-boundary match outranks a substring, a
       pinned title counts, and a failed run only gets a bonus *after* it matches.
@@ -289,7 +291,8 @@ Engineering rules that follow from the table:
   `s` sort by duration, Enter to open a run, `q` to quit)
 - **history** - `tm` (Time Machine): `list`, `search` (`--failed`, `--pinned`),
   `show`, `page` (pages a snapshot with the `less` keys), `replay`, `pin`/`unpin`,
-  `export [file]`, `clear`
+  `browse` (j/k, Enter to open, `/` to search, `r` to replay, `p` to pin, `x` to
+  delete - which asks first), `export [file]`, `clear`
 - **pager** - `less` and `more` over a file or stdin: space/b page, j/k move a
   line, g/G go to the ends, `/pattern` searches (Enter runs it, `n` repeats),
   q/Esc/Ctrl-C quit. They run on the alternate screen, so the scrollback is
@@ -577,7 +580,7 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
   it turns a 12-minute CI round trip into a 40-second loop:
 
   ```bash
-  python support/local_check.py          # 401 scenarios, fails loudly on regressions
+  python support/local_check.py          # 417 scenarios, fails loudly on regressions
   ```
 
   It copies `Shell/`, `Packages/`, `WebAssembly/` and the model half of `Terminal/` into a
@@ -724,9 +727,10 @@ support/push_via_api.py                              # push path when `git push`
    for a full editor is sustained raw input (arrow keys and paste come from the
    accessory bar, not a raw tty stream) and a way for a running command to see a
    file change underneath it.
-3. The snapshot-card UI in `Terminal/` (`HistoryCardCell`): a card stream over
-   `HistoryStore`, copy-output, re-enter (restore cwd/env) and pinning as a key
-   binding. The model, the search and the `tm` command are all there already.
+3. The snapshot-card UI in `Terminal/` (`HistoryCardCell`) - the same browsing
+   `tm browse` does on the terminal, drawn as cards instead. What is left of
+   Phase 1 after that is re-enter (restore cwd and env) as a key binding, which
+   needs the browser to hand the shell a `cd` plus a set of exports.
 4. The remote manifest fetcher, once (3) exists: HTTPS + fixed host/path prefix,
    digest-verified, user-initiated only. Keep the injected-transport seam so the
    unit tests stay offline.
