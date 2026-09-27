@@ -104,7 +104,8 @@ Engineering rules that follow from the table:
 
 - Phase 0, shell core: UIKit terminal view, accessory key bar, built-in shell
   with pipes/redirection/env vars, then scripts and the coreutils surface.
-  Status: **shell side done, one UI refactor open.** The engine dispatches
+  Status: **done.** The UI is split, the screen is coloured, and every piece
+  that can be tested without a simulator is tested. The engine dispatches
   through a built-in table (~120 commands across file/text/system groups) and
   supports `$(...)`, `$?`/`$#`/`$1`, assignments, `if`/`elif`/`else`, `for`,
   `while`/`until`, functions, comments and `sh file.sh`. ANSI SGR colour renders
@@ -144,9 +145,11 @@ Engineering rules that follow from the table:
       `TerminalStyle` + `ANSIParser` (SGR and escape scanning), `TerminalWidth`
       (East Asian widths), `TerminalScreen` (grid, cursor, scrollback),
       `TerminalOutput` (what the view controller holds)
-    - UI half (UIKit, CI only): `TerminalViewController`, and the still-to-do
-      `TerminalTextView` (rendering + scrollback), `AccessoryKeyBar`
-      (`Ctrl`/`Esc`/`Tab`/`|`/`/`/`~`), `HistoryCardCell` snapshot card stream.
+    - UI half (UIKit, CI only): `TerminalTextView` (scrollback, colours, and the
+      measurements behind `$LINES`/`$COLUMNS`), `AccessoryKeyBar`
+      (`Ctrl`/`Esc`/`Tab`/`|`/`/`/`~`), and `TerminalViewController`, which is
+      behaviour only: commands, sessions and key routing. `HistoryCardCell` (the
+      snapshot-card stream) is still to do.
   - `Sources/Terminal-ios/Shell/` - pure-logic shell core, no UIKit import:
     - `ShellTokenizer`, `ShellParser`, `ShellEnvironment` - words, quoting,
       `$VAR`/`$?`/`$#`/`$1`, pipes, redirection, `&&`/`||`/`;`
@@ -662,7 +665,7 @@ only consumes artifacts produced by CI:
 
 | Phase | Scope | Status |
 | ----- | ----- | ------ |
-| 0 | Shell core + command surface + terminal UI | Shell done (~150 commands incl. cmdlets), ANSI colour + grid model done; only the view split is open |
+| 0 | Shell core + command surface + terminal UI | Done: ~150 commands incl. cmdlets, ANSI colour, grid model, `less`/`more`/`ed`/`top`, and the view split |
 | 1 | Time Machine history | Core landed: structured snapshots recorded by the engine, ranked search, `tm show/page/replay/pin/export`, 64 KB output cap. Still open: a SQLite-backed `HistoryStore`, re-enter (restore cwd/env) as a key binding, and the snapshot-card UI |
 | 2 | Runtimes + package catalogs | Catalog, mirrors, `apt`/`apk`/`pip`/`winget`, digest verification and the **WASM interpreter** landed; CPython and MinGW payloads still to build |
 | 3 | Release hardening | Not started |
@@ -711,20 +714,19 @@ support/push_via_api.py                              # push path when `git push`
 
 ### Open items, in the order they should be picked up
 
-1. Split `TerminalViewController` into `TerminalTextView` (rendering +
-   scrollback) and `AccessoryKeyBar`; the controller already mixes layout with
-   execution. The screen model it draws is done and tested, so this is a straight
-   refactor with no behaviour change.
-2. More commands on the key channel that now exists: `less` and `more` are
-   done, and the same `InteractiveSession` shape would carry a `top`-style
-   viewer or a small `vi`. What is still missing for a real editor is sustained
-   raw input (arrow keys and paste come from the accessory bar, not a raw tty
-   stream) and a way for a running command to see the file change.
-3. Phase 2 core: the WASM interpreter landed (see the section above). Next is to
-   make it complete enough for real payloads - build a CPython-for-WASM module,
-   put it in the catalog, and fix whatever the interpreter turns out to be
-   missing (threads and SIMD are out of scope; `dlopen` and `fork` are
+1. Phase 2 core: the WASM interpreter landed (see the section above). Next is
+   to make it complete enough for real payloads - build a CPython-for-WASM
+   module, put it in the catalog, and fix whatever the interpreter turns out to
+   be missing (threads and SIMD are out of scope; `dlopen` and `fork` are
    impossible here by design).
+2. More commands on the channel that now exists, including its line mode: a
+   small `vi`, or a Python REPL once the interpreter lands. What is still missing
+   for a full editor is sustained raw input (arrow keys and paste come from the
+   accessory bar, not a raw tty stream) and a way for a running command to see a
+   file change underneath it.
+3. The snapshot-card UI in `Terminal/` (`HistoryCardCell`): a card stream over
+   `HistoryStore`, copy-output, re-enter (restore cwd/env) and pinning as a key
+   binding. The model, the search and the `tm` command are all there already.
 4. The remote manifest fetcher, once (3) exists: HTTPS + fixed host/path prefix,
    digest-verified, user-initiated only. Keep the injected-transport seam so the
    unit tests stay offline.
