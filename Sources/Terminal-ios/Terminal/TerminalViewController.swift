@@ -164,9 +164,24 @@ final class TerminalViewController: UIViewController {
     }
 
     func handleKey(_ key: String) {
-        if interactiveSession != nil {
-            // While a pager owns the screen the key bar talks to it: space to
-            // page, `q` (or Esc / Ctrl+C) to quit.
+        if let session = interactiveSession {
+            if session.inputMode == .line {
+                // A line-oriented session keeps the field visible and editable;
+                // only the "stop" keys go to it directly.
+                switch key {
+                case "Esc":
+                    send(key: InteractiveKey.escape)
+                case "Ctrl+C":
+                    send(key: InteractiveKey.interrupt)
+                case "Tab":
+                    inputField.insertText("\t")
+                default:
+                    inputField.insertText(key)
+                }
+                return
+            }
+            // A key-oriented session (a pager) takes every key: space to page,
+            // `q` (or Esc / Ctrl+C) to quit.
             switch key {
             case "Tab":
                 send(key: " ")
@@ -234,8 +249,26 @@ final class TerminalViewController: UIViewController {
         guard let session = interactiveSession else {
             return
         }
-        switch session.handle(key: key) {
-        case .frame(let text):
+        apply(session.handle(key: key))
+    }
+
+    /// Routes a completed line, for sessions that read whole lines.
+    func send(line: String) {
+        guard let session = interactiveSession else {
+            return
+        }
+        apply(session.handle(line: line))
+    }
+
+    /// Draws whatever the session returned.
+    ///
+    /// `.frame` and `.append` are handled the same way on purpose: a frame is
+    /// just text that happens to begin with "home and erase", and the grid in
+    /// `Terminal/` is what acts on that. The difference is a choice the command
+    /// makes, not something the view has to know about.
+    private func apply(_ step: InteractiveStep) {
+        switch step {
+        case .frame(let text), .append(let text):
             output.append(text)
             renderInteractive(text)
         case .finished(let text, let code):
@@ -243,6 +276,7 @@ final class TerminalViewController: UIViewController {
             output.append(text)
             render()
             updatePromptForSession()
+            inputField.text = ""
             if code != 0 {
                 appendLine("[exit \(code)]")
             }
@@ -261,15 +295,18 @@ final class TerminalViewController: UIViewController {
         scrollView.setContentOffset(bottom, animated: true)
     }
 
-    /// The prompt row says which mode the terminal is in.
+    /// The prompt row says which mode the terminal is in, and what the session
+    /// expects: single keys, or whole lines typed into the field.
     private func updatePromptForSession() {
-        if interactiveSession != nil {
-            promptLabel.text = ":"
-            inputField.placeholder = "space / b / j / k / G / q / …"
-        } else {
+        guard let session = interactiveSession else {
             promptLabel.text = "$"
             inputField.placeholder = nil
+            return
         }
+        promptLabel.text = session.inputMode == .line ? ":" : "⌨"
+        inputField.placeholder = session.inputMode == .line
+            ? "type a line, Return to send"
+            : "space / b / j / k / G / q / …"
     }
 
     // MARK: - Rendering
@@ -424,8 +461,13 @@ final class TerminalViewController: UIViewController {
 extension TerminalViewController: UITextFieldDelegate {
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        if interactiveSession != nil {
-            send(key: InteractiveKey.enter)
+        if let session = interactiveSession {
+            if session.inputMode == .line {
+                send(line: textField.text ?? "")
+                textField.text = ""
+            } else {
+                send(key: InteractiveKey.enter)
+            }
             return false
         }
         submit(textField.text ?? "")
@@ -440,7 +482,12 @@ extension TerminalViewController: UITextFieldDelegate {
         shouldChangeCharactersIn range: NSRange,
         replacementString string: String
     ) -> Bool {
-        guard interactiveSession != nil else {
+        guard let session = interactiveSession else {
+            return true
+        }
+        // A line-oriented session needs the text to stay in the field so the
+        // user can see and edit it.
+        guard session.inputMode == .key else {
             return true
         }
         for character in string {

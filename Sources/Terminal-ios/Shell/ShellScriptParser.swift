@@ -15,6 +15,9 @@ final class ShellSession {
     /// unwinds only as far as it should.
     var scriptDepth = 0
 
+    /// When this session started, for `top`'s uptime.
+    let startedAt = Date()
+
     /// Lines still available to `read` inside the running script. A pipeline
     /// that feeds a script (`cat nums.txt | sum`) fills this queue.
     private var inputQueue: [String] = []

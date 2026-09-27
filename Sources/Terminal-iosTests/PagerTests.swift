@@ -31,7 +31,7 @@ struct PagerTests {
 
     private func text(_ step: InteractiveStep) -> String {
         switch step {
-        case .frame(let text), .finished(let text, _):
+        case .frame(let text), .append(let text), .finished(let text, _):
             return text
         }
     }

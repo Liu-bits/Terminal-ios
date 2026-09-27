@@ -106,6 +106,7 @@ func checkExit(_ label: String, _ expected: Int, _ actual: Int) {
 func stepText(_ step: InteractiveStep) -> String {
     switch step {
     case .frame(let text): return text
+    case .append(let text): return text
     case .finished(let text, _): return text
     }
 }
@@ -841,6 +842,96 @@ do {
     check("json store reloads", "echo persisted", reloaded.entries().first?.command ?? "")
     let huge = HistoryEntry(command: "cat big", directory: "~", stdout: String(repeating: "x", count: HistoryEntry.outputLimit + 100))
     check("output is capped", "true", "\(huge.stdout.contains("output truncated"))")
+}
+
+// --- ed, the line editor ------------------------------------------------------
+do {
+    let (engine, _) = makeEngine()
+    engine.run("printf 'alpha\nbravo\ncharlie\n' > notes.txt")
+
+    // Without a screen, ed reads its commands from standard input, as on a pipe.
+    check("ed prints a range", "alpha\nbravo\ncharlie", engine.run("printf '1,$p\nq\n' | ed notes.txt").output)
+    check("ed addresses one line", "bravo", engine.run("printf '2p\nq\n' | ed notes.txt").output)
+    check("ed $ address", "charlie", engine.run("printf '$p\nq\n' | ed notes.txt").output)
+    check("ed . address", "charlie", engine.run("printf '.p\nq\n' | ed notes.txt").output)
+    check("ed n numbers lines", "2\tbravo", engine.run("printf '2n\nq\n' | ed notes.txt").output)
+    check("ed = prints the number", "3", engine.run("printf '$=\nq\n' | ed notes.txt").output)
+    // "bravo" with "ra" replaced is "bXvo": b + X + vo.
+    check("ed substitutes", "bXvo\n\n? (buffer modified; `w` to save or `Q` to discard)", engine.run("printf '2s/ra/X/\np\nq\n' | ed notes.txt").output)
+    check("ed keeps the file unchanged until w", "alpha\nbravo\ncharlie", engine.run("cat notes.txt").output)
+    check("ed q refuses when modified", "true", "\(engine.run("printf '2s/ra/X/\nq\n' | ed notes.txt").output.contains("modified"))")
+    check("ed Q quits without saving", "true", "\(!engine.run("printf '2s/ra/X/\nQ\n' | ed notes.txt").output.contains("modified"))")
+
+    engine.run("printf 'a\ndelta\n.\nw\nq\n' | ed notes.txt")
+    check("ed appends and writes", "alpha\nbravo\ncharlie\ndelta", engine.run("cat notes.txt").output)
+    engine.run("printf '1d\nw\nq\n' | ed notes.txt")
+    check("ed deletes and writes", "bravo\ncharlie\ndelta", engine.run("cat notes.txt").output)
+    engine.run("printf '1c\nX\n.\nw\nq\n' | ed notes.txt")
+    check("ed changes a line", "X\ncharlie\ndelta", engine.run("cat notes.txt").output)
+    engine.run("printf '2i\ninserted\n.\nw\nq\n' | ed notes.txt")
+    check("ed inserts before a line", "X\ninserted\ncharlie\ndelta", engine.run("cat notes.txt").output)
+    check("ed writes a new file", "true", "\(engine.run("printf 'a\nfresh\n.\nw other.txt\nq\n' | ed scratch.txt").output.contains("bytes written"))")
+    check("ed created it", "fresh", engine.run("cat other.txt").output)
+
+    // With a screen it becomes a session, and it wants whole lines.
+    if case .interactive(let session) = engine.runInteractive("ed notes.txt") {
+        check("ed is a line-mode session", "line", "\(session.inputMode)")
+        check("ed greets with the file", "true", "\(session.initialFrame.contains("notes.txt"))")
+        check("ed prints on request", "true", "\(stepText(session.handle(line: "1,2p")).contains("X"))")
+        check("ed help explains itself", "true", "\(stepText(session.handle(line: "h")).contains("append"))")
+        check("ed names an unknown command", "true", "\(stepText(session.handle(line: "zz")).contains("unknown command"))")
+        check("ed names an unimplemented one", "true", "\(stepText(session.handle(line: "u")).contains("undo"))")
+        check("ed does not finish on w", "false", "\(isFinished(session.handle(line: "w")))")
+        check("ed finishes on q", "true", "\(isFinished(session.handle(line: "q")))")
+    } else {
+        check("ed is a line-mode session", "interactive", "finished")
+    }
+}
+
+// --- top ----------------------------------------------------------------------
+do {
+    let (engine, _) = makeEngine()
+    engine.run("echo one")
+    engine.run("nosuchcmd")
+    engine.environment.variables["LINES"] = "8"
+    engine.environment.variables["COLUMNS"] = "60"
+
+    // Without a screen: one report, like `top -b`.
+    check("top prints a report", "true", "\(engine.run("top").output.contains("TimeShell top"))")
+    check("top shows a run", "true", "\(engine.run("top").output.contains("echo one"))")
+    check("top shows the working directory", "true", "\(engine.run("top").output.contains("~"))")
+
+    if case .interactive(let session) = engine.runInteractive("top"), let top = session as? TopSession {
+        check("top takes the screen", "true", "\(session.initialFrame.contains("TimeShell top"))")
+        check("top is key driven", "key", "\(session.inputMode)")
+        check("top lists the runs", "true", "\(top.visible.contains { $0.command == "echo one" })")
+        check("top hints its keys", "true", "\(stepText(session.handle(key: "x")).contains("q"))")
+
+        // f narrows to failures, and says so.
+        let filtered = session.handle(key: "f")
+        check("top filters to failures", "true", "\(top.visible.allSatisfy { !$0.succeeded })")
+        check("top filter is not empty", "true", "\(!top.visible.isEmpty)")
+        check("top shows the filter in the hint", "true", "\(stepText(filtered).contains("f:all"))")
+        check("top filter drops the success", "false", "\(top.visible.contains { $0.command == "echo one" })")
+
+        // Back to everything, then sort by duration.
+        _ = session.handle(key: "f")
+        _ = session.handle(key: "s")
+        check("top sorts slowest first", "true", "\(zip(top.visible, top.visible.dropFirst()).allSatisfy { $0.duration >= $1.duration })")
+
+        // Selection, detail, and back.
+        _ = session.handle(key: "j")
+        check("top moves the selection", "1", "\(top.selectedIndex)")
+        _ = session.handle(key: "g")
+        check("top returns to the top row", "0", "\(top.selectedIndex)")
+        let opened = session.handle(key: InteractiveKey.enter)
+        check("top opens the selected run", "true", "\(stepText(opened).contains("esc:back"))")
+        _ = session.handle(key: InteractiveKey.escape)
+        check("esc goes back to the list", "false", "\(isFinished(session.handle(key: "x")))")
+        check("q quits from the list", "true", "\(isFinished(session.handle(key: "q")))")
+    } else {
+        check("top takes the screen", "interactive", "finished")
+    }
 }
 
 print("")

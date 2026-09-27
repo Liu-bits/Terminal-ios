@@ -159,6 +159,9 @@ Engineering rules that follow from the table:
       `InteractiveSession` gets keys and returns frames, so a pager is driven
       by a script of keys in tests instead of a simulator
     - `BuiltinsPager` - `less`/`more` and the session behind them
+    - `BuiltinsEd` - `ed`, the line editor, and its session
+    - `BuiltinsTop` - `top`, a viewer over real session state (uptime, working
+      directory, snapshot and package counts, device memory, recent runs)
     - `TextSed` - the `sed` program, kept apart from the built-in that drives
       it because splitting a script into commands (ignoring `;` inside an
       `s///` body or a regex address) is the easy part to get wrong
@@ -278,6 +281,9 @@ Engineering rules that follow from the table:
   `expr` `eval` `sh` `source` `.` `which` `type` `command` `help` `man` `version`
 - **packages** - `apt` `apt-get` `apk` `pip` `pip3` `winget`; runtimes declared in the
   catalog: `python3` `python` `py` `gcc` `cc` `clang` `make`
+- **editors** - `ed` (the line editor: `a i c d p n = w q Q h` and `s/old/new/g`
+  with `N`/`.`/`$`/`N,M` addresses), `top` (recent activity with `f` failures,
+  `s` sort by duration, Enter to open a run, `q` to quit)
 - **history** - `tm` (Time Machine): `list`, `search` (`--failed`, `--pinned`),
   `show`, `page` (pages a snapshot with the `less` keys), `replay`, `pin`/`unpin`,
   `export [file]`, `clear`
@@ -406,6 +412,14 @@ commands work the other way round instead: the command hands back a session.
 - Frames are ordinary escape output (`ESC[?1049h`, `ESC[H`, `ESC[2J`, `ESC[7m`),
   so the grid in `Terminal/` does the drawing and the view controller only
   appends the frame and re-renders once. No pager drawing code lives in UIKit.
+- Three kinds of step, and the view treats `.frame` and `.append` identically:
+  `.frame` (redraw - commands that own the whole screen), `.append` (add to the
+  scrollback - line-oriented commands such as `ed`, whose output belongs where it
+  happens), `.finished` (leave the screen and report an exit code).
+- Two input modes. `.key` forwards single keystrokes (a pager). `.line` keeps the
+  text in the input field - visible and editable - and hands it over on Return,
+  which is what `ed` and any future REPL need; per-character routing would make
+  a typed command line invisible.
 - `TerminalViewController` routes keys while a session is active: typed
   characters, Return and the accessory bar all go to `send(key:)` instead of the
   shell line, the prompt turns into `:` with a key hint, and quitting restores
@@ -560,7 +574,7 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
   it turns a 12-minute CI round trip into a 40-second loop:
 
   ```bash
-  python support/local_check.py          # 360 scenarios, fails loudly on regressions
+  python support/local_check.py          # 401 scenarios, fails loudly on regressions
   ```
 
   It copies `Shell/`, `Packages/`, `WebAssembly/` and the model half of `Terminal/` into a
@@ -685,7 +699,7 @@ Sources/Terminal-ios/
 Sources/Terminal-iosTests/
   ShellEngineTests, ShellParserTests, ShellTokenizerTests, BuiltinsTests,
   ShellScriptTests, PackageManagerTests, TerminalScreenTests, WebAssemblyTests,
-  PowerShellTests, SourcePolicyTests, PagerTests, HistoryTests,
+  PowerShellTests, SourcePolicyTests, PagerTests, HistoryTests, EditorTests,
   TerminalViewControllerTests, WasmFixtures
 Sources/Terminal-iosUITests/AppUITests.swift
 catalog/catalog.json + catalog/payloads/*             # package source of truth
