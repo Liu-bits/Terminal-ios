@@ -75,6 +75,11 @@ import Foundation
 var failures = 0
 var checks = 0
 
+/// Unbuffered diagnostic: stdout is block buffered, so a crash loses it.
+func note(_ text: String) {
+    FileHandle.standardError.write(Data((text + "\n").utf8))
+}
+
 func makeEngine() -> (ShellEngine, URL) {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("shellcheck-\(UUID().uuidString)", isDirectory: true)
@@ -991,6 +996,44 @@ do {
     } else {
         check("browse opens a session", "interactive", "finished")
     }
+}
+
+// --- tar, cross-checked against Python's tarfile --------------------------------
+do {
+    let (engine, root) = makeEngine()
+    engine.run("mkdir -p tdir/nested")
+    checkExit("tar: write files", 0, engine.run("printf 'hello tar\\n' > tdir/a.txt; printf 'nested\\n' > tdir/nested/b.txt").exitCode)
+
+    let archive = engine.run("tar cf cross.tar tdir")
+    check("tar cf succeeds", "0", "\(archive.exitCode)")
+    let listing = engine.run("tar tf cross.tar")
+    check("tar tf lists the directory", "true", "\(listing.output.contains("tdir"))")
+    check("tar tf lists a nested file", "true", "\(listing.output.contains("nested/b.txt"))")
+    let verbose = engine.run("tar tf -v cross.tar")
+    check("tar tf -v sizes files", "true", "\(verbose.output.contains("10"))")
+
+    // Round trip: extract somewhere else and read it back.
+    checkExit("tar xf", 0, engine.run("mkdir -p out; tar xf cross.tar -C out").exitCode)
+    check("extracted file content", "hello tar", engine.run("cat out/tdir/a.txt").output)
+    check("extracted nested content", "nested", engine.run("cat out/tdir/nested/b.txt").output)
+
+    checkExit("tar refuses z", 2, engine.run("tar czf x.tar tdir").exitCode)
+    checkExit("tar on a missing archive", 1, engine.run("tar tf nope.tar").exitCode)
+
+    // Hand the archive to the Python cross-checker.
+    let crossDirectory = ProcessInfo.processInfo.environment["TERMINAL_CROSS_DIR"]
+    if let directory = crossDirectory {
+        let url = URL(fileURLWithPath: directory)
+            .appendingPathComponent("cross.tar")
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("cross.tar")
+        if let data = FileManager.default.contents(atPath: source.path) {
+            try? data.write(to: url)
+        }
+        print("CROSS tar-archive=\(url.path)")
+        print("CROSS tar-list=\(listing.output.replacingOccurrences(of: "\n", with: "|"))")
+    }
+    _ = root
 }
 
 print("")

@@ -278,6 +278,23 @@ extension ShellRunContext {
         return (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil
     }
 
+    /// Writes bytes, creating parent directories, and appending when asked.
+    ///
+    /// Mirrors `writeText` because archives and compressed files are binary; the
+    /// same sandbox resolution applies, so nothing can write outside the root.
+    @discardableResult
+    func writeData(_ data: Data, to path: String, append: Bool = false) -> Bool {
+        guard let url = url(for: path) else { return false }
+        try? fileManager.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if append, let existing = try? Data(contentsOf: url) {
+            return (try? (existing + data).write(to: url, options: .atomic)) != nil
+        }
+        return (try? data.write(to: url, options: .atomic)) != nil
+    }
+
     /// Input for a filter command: piped text, or the files named as operands.
     /// Returns `nil` when a named file cannot be read (caller reports the error).
     func inputText(named files: [String], command: String) -> (text: String?, failure: ShellResult?) {
