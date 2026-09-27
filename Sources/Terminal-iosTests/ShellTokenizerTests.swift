@@ -14,12 +14,32 @@ struct ShellTokenizerTests {
 
     @Test("Handles quotes and escapes")
     func handlesQuotesAndEscapes() {
+        // Single quotes are kept in the word on purpose: expansion needs to know
+        // which characters are literal. Double quotes are stripped, because
+        // nothing inside them is protected from expansion.
         #expect(ShellTokenizer.tokenize("echo 'a b' \"c d\" e\\ f") == [
-            .word("echo"), .word("a b"), .word("c d"), .word("e f"),
+            .word("echo"), .word("'a b'"), .word("c d"), .word("e f"),
         ])
         #expect(ShellTokenizer.tokenize("echo \"a\\\"b\" 'c\\d'") == [
-            .word("echo"), .word("a\"b"), .word("c\\d"),
+            .word("echo"), .word("a\"b"), .word("'c\\d'"),
         ])
+    }
+
+    @Test("Quotes protect their contents from expansion")
+    func quotesProtectExpansion() {
+        let environment = ShellEnvironment(
+            root: FileManager.default.temporaryDirectory,
+            variables: ["HOME": "/home/liu", "p": ""]
+        )
+        #expect(environment.expand("$HOME") == "/home/liu")
+        #expect(environment.expand("'$HOME'") == "$HOME")
+        #expect(environment.expand("pre'$HOME'post") == "pre$HOMEpost")
+        // An apostrophe with no partner (it can only come from inside double
+        // quotes) stays literal instead of swallowing the rest of the word.
+        #expect(environment.expand("it's") == "it's")
+        // Two quoted runs in one word, and an empty pair.
+        #expect(environment.expand("'a'$p'b'") == "ab")
+        #expect(environment.expand("''") == "")
     }
 
     @Test("Splits operators")

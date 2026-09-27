@@ -366,98 +366,64 @@ enum TextBuiltins {
 
     /// Supports the two substitutions people actually type: `s/old/new/`,
     /// `s/old/new/g`, `-n` with a trailing `p`, and `Nd` line deletion.
+    /// `sed`, backed by `SedProgram`.
+    ///
+    /// The argument scan is manual because `-e` may appear many times and
+    /// `ShellArgs` keeps only the last value of a flag.
     private static func sed(_ args: [String], _ context: ShellRunContext) -> ShellResult {
-        let parsed = ShellArgs.parse(args)
-        let quiet = parsed.has("n")
-        guard !parsed.operands.isEmpty else {
-            return .fail("sed: usage: sed [-n] 's/old/new/[g]' [file ...]", code: 2)
+        var scripts: [String] = []
+        var rest: [String] = []
+        var index = 0
+        while index < args.count {
+            let arg = args[index]
+            index += 1
+            switch arg {
+            case "-e", "--expression":
+                guard index < args.count else {
+                    return .fail("sed: option -e requires an argument", code: 2)
+                }
+                scripts.append(args[index])
+                index += 1
+            case "-f", "--file":
+                return .fail("sed: -f (script files) is not supported", code: 2)
+            case "-i", "--in-place":
+                return .fail("sed: -i is not supported; redirect to a file instead", code: 2)
+            default:
+                if arg.hasPrefix("--expression=") {
+                    scripts.append(String(arg.dropFirst("--expression=".count)))
+                } else if arg.hasPrefix("-e"), arg.count > 2 {
+                    scripts.append(String(arg.dropFirst(2)))
+                } else {
+                    rest.append(arg)
+                }
+            }
         }
-        let script = parsed.operands[0]
-        let files = Array(parsed.operands.dropFirst())
-        let input = context.inputText(named: files, command: "sed")
+
+        let parsed = ShellArgs.parse(rest)
+        let quiet = parsed.has("n")
+        let extended = parsed.has("E") || parsed.has("r")
+        var operands = parsed.operands
+        if scripts.isEmpty {
+            guard let first = operands.first else {
+                return .fail("sed: usage: sed [-nE] 's/old/new/g' [file ...]", code: 2)
+            }
+            scripts = [first]
+            operands = Array(operands.dropFirst())
+        }
+
+        let program = SedProgram.parse(scripts: scripts, quiet: quiet, extended: extended)
+        if let failure = program.failure {
+            return .fail(failure, code: 2)
+        }
+        let input = context.inputText(named: operands, command: "sed")
         if let failure = input.failure {
             return failure
         }
         let lines = context.lines(input.text ?? "")
-
-        var substitution: (old: String, new: String, global: Bool)?
-        var deleteLine: Int?
-        var printAfterSubstitution = false
-        let parts = script.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
-        for part in parts {
-            if part.hasPrefix("s") {
-                let body = Array(part.dropFirst())
-                let delimiter = body.first
-                guard let delimiter else { continue }
-                let segments = splitEscaped(body, delimiter: delimiter)
-                guard segments.count >= 3 else { continue }
-                let flags = segments.count >= 4 ? segments[3] : ""
-                substitution = (segments[1], segments[2], flags.contains("g"))
-                printAfterSubstitution = flags.contains("p")
-            } else if part.hasSuffix("d"), let lineNumber = Int(part.dropLast()) {
-                deleteLine = lineNumber
-            } else if part == "p" {
-                printAfterSubstitution = true
-            }
-        }
-
-        var output: [String] = []
-        for (index, line) in lines.enumerated() {
-            if let deleteLine, index + 1 == deleteLine {
-                continue
-            }
-            var result = line
-            var didSubstitute = false
-            if let substitution {
-                let before = result
-                if substitution.global {
-                    result = result.replacingOccurrences(of: substitution.old, with: substitution.new)
-                } else if let range = result.range(of: substitution.old) {
-                    result = result.replacingCharacters(in: range, with: substitution.new)
-                }
-                didSubstitute = result != before
-            }
-            if quiet {
-                if printAfterSubstitution && didSubstitute {
-                    output.append(result)
-                }
-                continue
-            }
-            output.append(result)
-            if printAfterSubstitution && didSubstitute {
-                output.append(result)
-            }
-        }
-        return .ok(output.joined(separator: "\n"))
+        return .ok(program.run(lines).joined(separator: "\n"))
     }
 
     /// Splits `s/a/b/g` style bodies on an unescaped delimiter.
-    private static func splitEscaped(_ text: [Character], delimiter: Character) -> [String] {
-        var result: [String] = []
-        var current = ""
-        var escaped = false
-        for char in text {
-            if escaped {
-                current.append(char)
-                escaped = false
-                continue
-            }
-            if char == "\\" {
-                current.append(char)
-                escaped = true
-                continue
-            }
-            if char == delimiter {
-                result.append(current)
-                current = ""
-                continue
-            }
-            current.append(char)
-        }
-        result.append(current)
-        return result
-    }
-
     // MARK: - sort / uniq / cut / tr / tee
 
     private static func sort(_ args: [String], _ context: ShellRunContext) -> ShellResult {

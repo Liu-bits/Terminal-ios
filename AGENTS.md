@@ -155,6 +155,9 @@ Engineering rules that follow from the table:
     - `ShellBuiltin` - `ShellRunContext` (what a command may touch), `ShellArgs`
       flag/operand parser, shared file helpers
     - `BuiltinsFile` / `BuiltinsText` / `BuiltinsSystem` - the command surface
+    - `TextSed` - the `sed` program, kept apart from the built-in that drives
+      it because splitting a script into commands (ignoring `;` inside an
+      `s///` body or a regex address) is the easy part to get wrong
     - `ShellBuiltins` - the merged command table plus `help` text
     - `ShellScriptParser` / `ShellScriptRunner` - `if`/`elif`/`else`, `for`,
       `while`/`until`, functions, comments, continuations, `exit`
@@ -204,6 +207,20 @@ Engineering rules that follow from the table:
   are all `Terminal-ios`. Bundle identifiers are `com.liu.Terminal-ios[Tests|UITests]`;
   change the `com.liu` prefix if a different team prefix is required.
 
+### Shell quoting rules (load bearing)
+
+- A single-quoted run is **literal**: nothing inside expands, neither `$VAR`
+  nor `$(command)`. `ShellTokenizer` keeps the quotes in the word so
+  `ShellEnvironment.expand` can see them, and the engine drops them on the
+  way out. An unpaired `'` - only reachable from inside double quotes, as in
+  `"it's"` - is copied literally instead of swallowing the rest of the word.
+- Double quotes allow `$VAR` and `$(...)`, and the tokenizer strips them.
+- `$(...)` and backticks expand in `ShellEngine.interpolate` **before**
+  parsing, and that pass already tracks both quote kinds. This is why `$p`
+  written inside single quotes reaches `sed -n '$p'` intact.
+- A bare `'` in the middle of a word is an unterminated quote: the line fails
+  with a syntax error, exactly as in bash.
+
 ### Command surface (as built)
 
 `help` prints the live table, so the count in this doc is only a sanity check:
@@ -214,14 +231,17 @@ Engineering rules that follow from the table:
   test target). Run `support/local_check.py` before pushing: it catches most of what
   these suites catch, in 40 seconds instead of 12 minutes.
 
-- **files** - `ls` (`-a -l -d`, `--color[=auto` `always` `never]`) `cat` (`-n`)
+- **files** - `ls` (`-a -l -d`, `--color` with `auto`/`always`/`never`) `cat` (`-n`)
   `mkdir` (`-p`) `rmdir` `rm` (`-r -f`)
   `cp` (`-r -f`) `mv` `touch` `stat` `ln` (`-s`) `basename` `dirname` `realpath`
   `find` (`-name -type -maxdepth`) `tree` (`-L`) `du` `df` `chmod` (octal and
   `+x`-style) `file` `mktemp`
 - **text** - `echo` (`-n -e`) `printf` `head` `tail` `wc` (`-l -w -c`)
-  `grep` (`-ivnclrE`, `--color[=auto` `always` `never]`)
-  `sed` (`s///`, `-n`, `Nd`) `sort` (`-nruf`) `uniq` (`-cdu`) `cut` (`-d -f -c`)
+  `grep` (`-ivnclrE`, `--color` with `auto`/`always`/`never`)
+  `sed` (`-n`, `-E`/`-r`, `-e` repeated, addresses `N`, `$` or `/re/`, ranges
+  `2,4` / `/a/,/b/` / `3,$`, `!` negation, `s///` with `g`/`p`/`N`/`I`, and
+  `p`, `d`, `q`, `=`, `y///`)
+  `sort` (`-nruf`) `uniq` (`-cdu`) `cut` (`-d -f -c`)
   `tr` (`-d -s`, ranges) `tee` (`-a`) `nl` `rev` `tac` `seq` `yes` `base64` (`-d`)
   `sha256sum` `sha1sum` `md5sum` `cksum` `diff` `strings`
 - **system** - `whoami` `id` `uname` (`-a -m -s -r`) `hostname` `arch` `nproc`
@@ -464,7 +484,7 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
   it turns a 12-minute CI round trip into a 40-second loop:
 
   ```bash
-  python support/local_check.py          # 221 scenarios, fails loudly on regressions
+  python support/local_check.py          # 263 scenarios, fails loudly on regressions
   ```
 
   It copies `Shell/`, `Packages/`, `WebAssembly/` and the model half of `Terminal/` into a

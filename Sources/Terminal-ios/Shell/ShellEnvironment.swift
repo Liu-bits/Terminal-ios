@@ -46,6 +46,16 @@ struct ShellEnvironment {
         var index = word.startIndex
         while index < word.endIndex {
             let char = word[index]
+            // Single quotes survive tokenizing precisely so that this pass can
+            // see them: POSIX says nothing inside them expands, so `$p` and
+            // `$(cmd)` must come through as written. A lone `'` (one that came
+            // from inside double quotes, e.g. `"it's"`) has no partner and is
+            // copied literally.
+            if char == "'", let close = word[word.index(after: index)...].firstIndex(of: "'") {
+                result += word[word.index(after: index)..<close]
+                index = word.index(after: close)
+                continue
+            }
             guard char == "$" else {
                 result.append(char)
                 index = word.index(after: index)

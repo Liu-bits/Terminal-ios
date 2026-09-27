@@ -15,6 +15,35 @@ struct BuiltinsTests {
         return (ShellEngine(environment: ShellEnvironment(root: root)), root)
     }
 
+    @Test("sed addresses, ranges and BRE behave")
+    func sedSubset() throws {
+        let (engine, _) = makeEngine()
+        engine.run("printf 'a\\nb\\nc\\nd\\n' > l.txt")
+        #expect(engine.run("sed 's/a/A/' l.txt").output == "A\nb\nc\nd")
+        #expect(engine.run("printf 'banana\\n' | sed 's/a/A/g'").output == "bAnAnA")
+        #expect(engine.run("sed -e 's/a/A/' -e 's/b/B/' l.txt").output == "A\nB\nc\nd")
+        #expect(engine.run("sed -n '2p' l.txt").output == "b")
+        #expect(engine.run("sed -n '$p' l.txt").output == "d")
+        #expect(engine.run("sed -n '/c/p' l.txt").output == "c")
+        #expect(engine.run("sed -n '2!p' l.txt").output == "a\nc\nd")
+        #expect(engine.run("sed '2,3d' l.txt").output == "a\nd")
+        #expect(engine.run("sed '2,$d' l.txt").output == "a")
+        #expect(engine.run("sed -n '/b/,/c/p' l.txt").output == "b\nc")
+        #expect(engine.run("sed '2q' l.txt").output == "a\nb")
+        #expect(engine.run("printf 'abcabc\\n' | sed 'y/abc/xyz/'").output == "xyzxyz")
+        #expect(engine.run("printf '123\\n' | sed 's/[0-9]/<&>/'").output == "<1>23")
+        #expect(engine.run("printf 'ab\\n' | sed 's/\\(a\\)\\(b\\)/\\2\\1/'").output == "ba")
+        // In BRE a bare `|` is an ordinary character, so this replaces the whole
+        // line only when the pattern really is a literal.
+        #expect(engine.run("printf 'a|b\\n' | sed 's/a|b/X/'").output == "X")
+        #expect(engine.run("printf 'zzz\\n' | sed -E 's/z+/X/'").output == "X")
+        // Refusals are explicit: half-applied scripts are worse than an error.
+        #expect(engine.run("sed -i 's/a/A/' l.txt").exitCode == 2)
+        #expect(engine.run("sed -i 's/a/A/' l.txt").output.contains("-i"))
+        #expect(engine.run("sed 'Z' l.txt").exitCode == 2)
+        #expect(engine.run("sed 's/a/A/' l.txt").output == "A\nb\nc\nd")
+    }
+
     @Test("file commands create, list and remove a tree")
     func fileCommands() throws {
         let (engine, root) = makeEngine()

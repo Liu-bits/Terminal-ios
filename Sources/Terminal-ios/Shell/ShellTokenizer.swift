@@ -80,11 +80,16 @@ enum ShellTokenizer {
                 tokens.append(.sequence)
                 index = chars.index(after: index)
             case "'":
+                // The quotes are kept in the word: `ShellEnvironment.expand`
+                // needs to see them to know which characters must not be
+                // expanded, and the engine strips them on the way out.
+                current.append(char)
                 index = chars.index(after: index)
                 var closedQuote = false
                 while index < chars.endIndex {
                     if chars[index] == "'" {
                         closedQuote = true
+                        current.append(chars[index])
                         index = chars.index(after: index)
                         break
                     }

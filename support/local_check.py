@@ -115,6 +115,13 @@ do {
     check("failure then rescue", "rescued", engine.run("nosuchcmd || echo rescued").output)
     checkExit("command not found", 127, engine.run("nosuchcmd").exitCode)
     check("exit status variable", "1", engine.run("false; echo $?").output)
+    check("single quotes stop expansion", "$HOME", engine.run("echo '$HOME'").output)
+    check("single quotes stop substitution", "$(echo hi)", engine.run("echo '$(echo hi)'").output)
+    check("double quotes still expand", "hi", engine.run("export X=hi; echo \"$X\"").output)
+    // An unpaired apostrophe can only arrive from inside double quotes: bare
+    // `echo it's` is an unterminated quote, exactly as in bash.
+    check("apostrophe survives double quotes", "it's", engine.run("echo \"it's\"").output)
+    checkExit("bare apostrophe is a quote error", 2, engine.run("echo it's").exitCode)
 }
 
 // --- text filters ------------------------------------------------------------
@@ -551,6 +558,38 @@ do {
     check("grep --color=never", "alpha", engine.run("grep --color=never alpha g.txt").output)
     check("grep -v is not highlighted", "beta", engine.run("grep --color=always -v alpha g.txt").output)
     check("grep -n paints the number", "true", "\(engine.run("grep --color=always -n alpha g.txt").output.contains("\u{1B}[38;5;10m1"))")
+}
+
+// --- sed ---------------------------------------------------------------------
+do {
+    let (engine, _) = makeEngine()
+    checkExit("write letters", 0, engine.run("printf 'a\nb\nc\nd\n' > l.txt").exitCode)
+    check("sed substitute", "A\nb\nc\nd", engine.run("sed 's/a/A/' l.txt").output)
+    check("sed global", "bAnAnA", engine.run("printf 'banana\n' | sed 's/a/A/g'").output)
+    check("sed occurrence 2", "foO", engine.run("printf 'foo\n' | sed 's/o/O/2'").output)
+    check("sed multiple -e", "A\nB\nc\nd", engine.run("sed -e 's/a/A/' -e 's/b/B/' l.txt").output)
+    check("sed semicolon scripts", "A\nB\nc\nd", engine.run("sed 's/a/A/;s/b/B/' l.txt").output)
+    check("sed -n p", "b", engine.run("sed -n '2p' l.txt").output)
+    check("sed $ address", "d", engine.run("sed -n '$p' l.txt").output)
+    check("sed regex address", "b", engine.run("sed -n '/b/p' l.txt").output)
+    check("sed negation", "a\nc\nd", engine.run("sed -n '2!p' l.txt").output)
+    check("sed range delete", "a\nd", engine.run("sed '2,3d' l.txt").output)
+    check("sed range to end", "a", engine.run("sed '2,$d' l.txt").output)
+    check("sed regex range", "b\nc", engine.run("sed -n '/b/,/c/p' l.txt").output)
+    check("sed quit", "a\nb", engine.run("sed '2q' l.txt").output)
+    check("sed =", "1\na\n2\nb", engine.run("printf 'a\nb\n' | sed '='").output)
+    check("sed y", "xyzxyz", engine.run("printf 'abcabc\n' | sed 'y/abc/xyz/'").output)
+    check("sed ampersand", "<1>23", engine.run("printf '123\n' | sed 's/[0-9]/<&>/'").output)
+    check("sed -n p flag", "A", engine.run("sed -n 's/a/A/p' l.txt | head -n 1").output)
+    check("sed BRE pipe is literal", "X", engine.run("printf 'a|b\n' | sed 's/a|b/X/'").output)
+    check("sed -E alternation", "pet", engine.run("printf 'cat\n' | sed -E 's/cat|dog/pet/'").output)
+    check("sed BRE groups", "ba", engine.run("printf 'ab\n' | sed 's/\\(a\\)\\(b\\)/\\2\\1/'").output)
+    check("sed replacement escape", "a.b", engine.run("printf 'aXb\n' | sed 's/X/./'").output)
+    check("sed file+stdin", "A\nZ", engine.run("sed 's/a/A/' l.txt | head -n 1; printf 'z\n' | sed 's/z/Z/'").output)
+    checkExit("sed -i is refused", 2, engine.run("sed -i 's/a/A/' l.txt").exitCode)
+    check("sed -i says why", "true", "\(engine.run("sed -i 's/a/A/' l.txt").output.contains("-i"))")
+    checkExit("sed bad command is refused", 2, engine.run("sed 'Z' l.txt").exitCode)
+    check("sed still works after refusal", "A\nb\nc\nd", engine.run("sed 's/a/A/' l.txt").output)
 }
 
 print("")
