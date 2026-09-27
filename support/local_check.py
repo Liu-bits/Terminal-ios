@@ -717,6 +717,132 @@ do {
     checkExit("less on a missing file", 1, engine.run("less nope.txt").exitCode)
 }
 
+// --- Time Machine -------------------------------------------------------------
+do {
+    let (engine, _) = makeEngine()
+    var captured: [HistoryEntry] = []
+    engine.onExecute = { captured.append($0) }
+
+    checkExit("tm: run something", 0, engine.run("echo hello").exitCode)
+    engine.run("nosuchcmd")
+    check("tm: one snapshot per line", "2", "\(captured.count)")
+    if let entry = captured.first {
+        check("tm: command recorded", "echo hello", entry.command)
+        check("tm: argv as written", "echo hello", entry.argv.joined(separator: " "))
+        check("tm: exit recorded", "0", "\(entry.exitCode)")
+        check("tm: output recorded", "hello", entry.stdout)
+        check("tm: duration is measured", "true", "\(entry.duration >= 0)")
+        // The shell's own bookkeeping would drown the useful variables.
+        check("tm: bookkeeping hidden", "true", "\(entry.environment["?"] == nil && entry.environment["#"] == nil)")
+        check("tm: directory recorded", "true", "\(!entry.directory.isEmpty)")
+    } else {
+        check("tm: snapshot present", "1", "0")
+    }
+    // A missing command exits 127, not 1.
+    check("tm: failure recorded", "127", "\(captured.last?.exitCode ?? -1)")
+
+    // From here on the runs above are the only snapshots.
+    engine.onExecute = nil
+    check("tm list finds them", "true", "\(engine.run("tm list").output.contains("nosuchcmd"))")
+    check("tm list marks the failure", "true", "\(engine.run("tm list").output.contains("fail"))")
+    check("tm list marks the success", "true", "\(engine.run("tm list").output.contains("ok"))")
+
+    let identifier = engine.snapshots.recent(1).first?.shortID ?? "missing"
+    check("tm search finds the command", "true", "\(engine.run("tm search hello").output.contains("$ "))")
+    check("tm search --failed", "true", "\(engine.run("tm search --failed nosuchcmd").output.contains("nosuchcmd"))")
+    check("tm search --failed skips successes", "true", "\(engine.run("tm search --failed hello").output.contains("no snapshot") || !engine.run("tm search --failed hello").output.contains("echo hello"))")
+    check("tm search miss is friendly", "true", "\(engine.run("tm search zzzz").output.contains("No snapshot matches"))")
+    check("tm show prints the command", "true", "\(engine.run("tm show \(identifier)").output.contains("nosuchcmd"))")
+    check("tm show prints the cwd", "true", "\(engine.run("tm show \(identifier)").output.contains("directory"))")
+    checkExit("tm show with an unknown id", 1, engine.run("tm show zzzzzzzz").exitCode)
+
+    // Pinning is what turns a snapshot into an action card.
+    check("tm pin", "true", "\(engine.run("tm pin \(identifier) deploy").output.contains("Pinned"))")
+    check("tm list shows the pin", "true", "\(engine.run("tm list").output.contains("* "))")
+    check("pinned only search", "true", "\(engine.run("tm search --pinned nosuchcmd").output.contains("nosuchcmd"))")
+    check("tm unpin", "true", "\(engine.run("tm unpin \(identifier)").output.contains("Unpinned"))")
+
+    check("tm export mentions the command", "true", "\(engine.run("tm export").output.contains("$ nosuchcmd"))")
+    checkExit("tm export to a file", 0, engine.run("tm export dump.txt").exitCode)
+    check("tm export wrote the file", "true", "\(engine.run("cat dump.txt").output.contains("nosuchcmd"))")
+
+    // Replay re-enters the command as it was typed.
+    engine.run("printf 'replay me\\n' > note.txt")
+    let echoID = engine.snapshots.entries().first { $0.command == "echo hello" }?.shortID ?? "missing"
+    check("tm replay", "hello", engine.run("tm replay \(echoID)").output)
+
+    // Paging a snapshot: without a screen it prints, with one it pages.
+    check("tm page without a screen", "true", "\(engine.run("tm page \(echoID)").output.contains("hello"))")
+    engine.environment.variables["LINES"] = "4"
+    engine.environment.variables["COLUMNS"] = "40"
+    if case .interactive(let session) = engine.runInteractive("tm page \(echoID)") {
+        check("tm page opens a session", "true", "\(session.initialFrame.contains("snapshot"))")
+        check("tm page shows the command", "true", "\(session.initialFrame.contains("echo hello"))")
+        check("tm page quits", "true", "\(isFinished(session.handle(key: "q")))")
+    } else {
+        check("tm page opens a session", "interactive", "finished")
+    }
+
+    // A snapshot of an interactive command stores no escape sequences.
+    var frames: [HistoryEntry] = []
+    engine.onExecute = { frames.append($0) }
+    engine.run("printf 'a\\nb\\nc\\nd\\ne\\n' > page.txt")
+    _ = engine.runInteractive("less page.txt")
+    engine.onExecute = nil
+    let paged = frames.last
+    check("tm: interactive output is not stored as escapes", "true", "\(paged?.stdout.isEmpty ?? false)")
+    check("tm: interactive command is still recorded", "less page.txt", paged?.command ?? "")
+
+    check("tm clear", "true", "\(engine.run("tm clear").output.contains("Cleared"))")
+    // `tm clear` is itself a run, so it is the one snapshot left behind.
+    let afterClear = engine.run("tm list").output
+    check("tm clear dropped the old snapshots", "true", "\(!afterClear.contains("echo hello"))")
+    check("tm clear recorded itself", "true", "\(afterClear.contains("tm clear"))")
+    checkExit("tm rejects an unknown subcommand", 2, engine.run("tm nonsense").exitCode)
+}
+
+// --- the store and the search, directly ---------------------------------------
+do {
+    let store = MemoryHistoryStore(limit: 3)
+    for index in 1...5 {
+        store.append(HistoryEntry(command: "cmd\(index)", directory: "~", stdout: "line \(index)"))
+    }
+    check("store keeps its limit", "3", "\(store.entries().count)")
+    check("store is newest first", "cmd5", store.entries().first?.command ?? "")
+    check("store deletes by prefix", "2", "\({ store.delete(id: store.entries().first!.shortID); return store.entries().count }())")
+    check("store finds by prefix", "true", "\(store.find(id: store.entries().first!.shortID) != nil)")
+    store.clear()
+    check("store clears", "0", "\(store.entries().count)")
+
+    let searchStore = MemoryHistoryStore(entries: [
+        HistoryEntry(command: "grep needle log.txt", directory: "~", stdout: "found nothing", pinned: true, title: "logs"),
+        HistoryEntry(command: "cat log.txt", directory: "~", stdout: "needle here", exitCode: 1),
+    ])
+    let ranked = searchStore.search(HistoryFilter(text: "needle"))
+    check("search finds both", "2", "\(ranked.count)")
+    check("command matches rank first", "grep needle log.txt", ranked.first?.entry.command ?? "")
+    check("command match is flagged", "true", "\(ranked.first?.matchedCommand ?? false)")
+    check("output match is not a command match", "false", "\(ranked.last?.matchedCommand ?? true)")
+    check("output lines preview", "true", "\(ranked.last?.outputLines.first?.contains("needle") ?? false)")
+    check("failed only filter", "1", "\(searchStore.search(HistoryFilter(text: "needle", failedOnly: true)).count)")
+    check("pinned only filter", "1", "\(searchStore.search(HistoryFilter(text: "needle", pinnedOnly: true)).count)")
+    check("title counts as a match", "1", "\(searchStore.search(HistoryFilter(text: "logs")).count)")
+    check("limit is honoured", "1", "\(searchStore.search(HistoryFilter(text: "needle", limit: 1)).count)")
+    check("no query returns everything", "2", "\(searchStore.search(HistoryFilter()).count)")
+    check("export mentions both", "true", "\(HistorySearch.export(searchStore.entries()).contains("$ cat log.txt"))")
+
+    // The JSON store survives a round trip and caps runaway output.
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("history-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let json = JSONHistoryStore(directory: root, limit: 10)
+    json.append(HistoryEntry(command: "echo persisted", directory: "~", stdout: "yes"))
+    let reloaded = JSONHistoryStore(directory: root, limit: 10)
+    check("json store reloads", "echo persisted", reloaded.entries().first?.command ?? "")
+    let huge = HistoryEntry(command: "cat big", directory: "~", stdout: String(repeating: "x", count: HistoryEntry.outputLimit + 100))
+    check("output is capped", "true", "\(huge.stdout.contains("output truncated"))")
+}
+
 print("")
 print("checks: \(checks), failures: \(failures)")
 exit(failures == 0 ? 0 : 1)
@@ -731,7 +857,7 @@ def gather_sources() -> list[pathlib.Path]:
     """
     skip = {"URLSessionTransport.swift"}
     files: list[pathlib.Path] = []
-    for sub in ("Shell", "Packages", "WebAssembly", "Terminal"):
+    for sub in ("Shell", "Packages", "WebAssembly", "Terminal", "History"):
         for path in sorted((ROOT / "Sources" / "Terminal-ios" / sub).glob("*.swift")):
             if path.name in skip:
                 continue

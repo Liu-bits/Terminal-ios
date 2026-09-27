@@ -36,6 +36,10 @@ final class ShellRunContext {
     /// The owning session, so commands such as `read` can consume script input.
     var session: ShellSession?
 
+    /// Snapshots of past runs. The engine replaces this with the persistent
+    /// store; the in-memory default keeps a context usable on its own.
+    var snapshots: HistoryStore = MemoryHistoryStore()
+
     /// True when this command may take the screen and wait for keys.
     ///
     /// Off by default: only `ShellEngine.runInteractive` turns it on, and only

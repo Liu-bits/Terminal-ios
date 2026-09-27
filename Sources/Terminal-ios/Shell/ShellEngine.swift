@@ -43,9 +43,25 @@ final class ShellEngine {
         session.functions
     }
 
-    init(environment: ShellEnvironment = ShellEnvironment(), history: [String] = []) {
+    /// Where snapshots are written. The app may swap in another store (a
+    /// SQLite-backed one, say) without the shell noticing.
+    var snapshots: HistoryStore
+
+    /// Notified after every top-level line, once the snapshot has been stored.
+    ///
+    /// This is an observer, not the thing that persists: the engine writes to
+    /// `snapshots` itself, so `tm` sees a run whether or not a host is watching.
+    var onExecute: ((HistoryEntry) -> Void)?
+
+    init(
+        environment: ShellEnvironment = ShellEnvironment(),
+        history: [String] = [],
+        snapshots: HistoryStore? = nil
+    ) {
         self.session = ShellSession(environment: environment)
         self.history = history
+        self.snapshots = snapshots
+            ?? JSONHistoryStore(directory: environment.root.appendingPathComponent(".history"))
         bootstrapEnvironment()
     }
 
@@ -133,6 +149,9 @@ final class ShellEngine {
         }
         history.append(line)
         session.exitStatus = nil
+        // `Date` is wall-clock, so a clock change can make a duration look odd;
+        // it is what a snapshot should show either way.
+        let started = Date()
         var result = executeLine(trimmed)
         session.record(status: result.exitCode)
         // Like command substitution: the final output never carries trailing
@@ -140,7 +159,58 @@ final class ShellEngine {
         while result.output.hasSuffix("\n") {
             result.output.removeLast()
         }
+        record(line: trimmed, result: result, started: started)
         return result
+    }
+
+    /// Files one snapshot. Only top-level lines are recorded: a script's inner
+    /// lines would swamp the history with noise the user never typed, and
+    /// replaying the script replays them anyway.
+    private func record(line: String, result: ShellResult, started: Date) {
+        // Skip the work entirely when nothing can observe the result and the
+        // store is a plain in-memory one nobody reads.
+        guard onExecute != nil || !(snapshots is MemoryHistoryStore) else {
+            return
+        }
+        let entry = HistoryEntry(
+                command: line,
+                argv: recordedArgv(of: line),
+                directory: environment.displayPath(environment.currentDirectory),
+                environment: environment.variables.filter { key, _ in
+                    // The shell's own bookkeeping would drown the useful values.
+                    !["?", "#", "@", "*", "0"].contains(key)
+                },
+                // An interactive command's output is a screen frame, not text:
+                // storing the escapes would make the snapshot unreadable.
+                stdout: result.session == nil ? result.output : "",
+            exitCode: result.exitCode,
+            duration: Date().timeIntervalSince(started)
+        )
+        snapshots.append(entry)
+        onExecute?(entry)
+    }
+
+    /// Words of the first command as written, before expansion, so a snapshot
+    /// shows what the user meant rather than what `$VAR` happened to hold.
+    private func recordedArgv(of line: String) -> [String] {
+        guard let tokens = ShellTokenizer.tokenize(interpolate(line)),
+              let ast = ShellParser.parse(tokens) else {
+            return []
+        }
+        return recordedArgv(of: ast)
+    }
+
+    private func recordedArgv(of node: ShellAST) -> [String] {
+        switch node {
+        case .empty:
+            return []
+        case .pipeline(let commands):
+            return commands.first?.argv ?? []
+        // For a chain (`a; b`) the leftmost branch is the one that ran first,
+        // and it is the only one that can be reported without executing.
+        case .and(let left, _), .or(let left, _), .sequence(let left, _):
+            return recordedArgv(of: left)
+        }
     }
 
     /// Runs a script body (used by `sh file.sh`, `source`, functions and the
@@ -548,6 +618,7 @@ final class ShellEngine {
         context.session = session
         context.colorizeOutput = session.environment.colorEnabled
         context.interactive = interactive
+        context.snapshots = snapshots
         return context
     }
 

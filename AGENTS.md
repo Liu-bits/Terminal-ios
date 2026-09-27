@@ -191,10 +191,19 @@ Engineering rules that follow from the table:
     - `WasmWASI` - the WASI subset (`fd_write`/`fd_read`, args, environ, clock,
       random, `proc_exit`) and nothing else
     - `WasmRuntime` - parse + run entry points and `wasm info` summaries
-  - `Sources/Terminal-ios/History/` - Time Machine snapshot store: local SQLite
-    (command + argv, cwd, env, full stdout/stderr, exit code, duration),
-    full-text search, re-enter (restore cwd/env), replay-with-edits,
-    copy-output, pin-to-action cards, plain-text export. No SwiftData, no CloudKit.
+  - `Sources/Terminal-ios/History/` - the Time Machine (Phase 1):
+    - `HistoryEntry` - one run captured whole: command, argv as written, cwd,
+      environment, output (capped at 64 KB), exit code, duration, pin/title
+    - `HistoryStore` - the protocol, plus `MemoryHistoryStore` (tests) and
+      `JSONHistoryStore` (one file under the sandbox root, reloaded per
+      operation so two instances cannot disagree)
+    - `HistorySearch` - `HistoryFilter` and ranked search: a command match
+      outranks an output match, a word-boundary match outranks a substring, a
+      pinned title counts, and a failed run only gets a bonus *after* it matches.
+      Also the plain-text export
+    - A SQLite-backed store is the plan, not the code: the protocol is the seam,
+      and JSON keeps the local checker able to compile and run everything on
+      Windows, where the SQLite module is not available.
   - `catalog/` (repo root, outside the Xcode target) - the package source of
     truth: `catalog.json` (manifest, sha256 filled in by the generator) and
     `payloads/*.sh`. Keeping it out of `Sources/` means the Xcode
@@ -210,6 +219,21 @@ Engineering rules that follow from the table:
 - Naming: the Xcode target/product, the bundle display name, and the repository
   are all `Terminal-ios`. Bundle identifiers are `com.liu.Terminal-ios[Tests|UITests]`;
   change the `com.liu` prefix if a different team prefix is required.
+
+### Time Machine: what is recorded, and when
+
+- Every **top-level** line is snapshotted by the engine, which stores it in
+  `ShellEngine.snapshots` and then notifies `onExecute`. A script's inner lines
+  are not recorded: they would swamp the history with lines the user never
+  typed, and replaying the script replays them anyway.
+- `argv` is recorded **as written** (no `$VAR` expansion), so a snapshot shows
+  what the user meant rather than what the environment happened to hold.
+- Interactive runs (a pager) are recorded with an empty `stdout`, because their
+  output is a screen frame rather than text.
+- `$?`, `$#`, `$@`, `$*` and `$0` are filtered out of the recorded environment;
+  the rest is kept so `replay` can restore the context.
+- `tm clear` is itself a run, so the list is not empty a moment later - the
+  command says so in its own output.
 
 ### Shell quoting rules (load bearing)
 
@@ -254,6 +278,9 @@ Engineering rules that follow from the table:
   `expr` `eval` `sh` `source` `.` `which` `type` `command` `help` `man` `version`
 - **packages** - `apt` `apt-get` `apk` `pip` `pip3` `winget`; runtimes declared in the
   catalog: `python3` `python` `py` `gcc` `cc` `clang` `make`
+- **history** - `tm` (Time Machine): `list`, `search` (`--failed`, `--pinned`),
+  `show`, `page` (pages a snapshot with the `less` keys), `replay`, `pin`/`unpin`,
+  `export [file]`, `clear`
 - **pager** - `less` and `more` over a file or stdin: space/b page, j/k move a
   line, g/G go to the ends, `/pattern` searches (Enter runs it, `n` repeats),
   q/Esc/Ctrl-C quit. They run on the alternate screen, so the scrollback is
@@ -528,7 +555,7 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
   it turns a 12-minute CI round trip into a 40-second loop:
 
   ```bash
-  python support/local_check.py          # 301 scenarios, fails loudly on regressions
+  python support/local_check.py          # 360 scenarios, fails loudly on regressions
   ```
 
   It copies `Shell/`, `Packages/`, `WebAssembly/` and the model half of `Terminal/` into a
@@ -612,12 +639,12 @@ only consumes artifacts produced by CI:
 
 ## Progress snapshot (2026-09-26, evening)
 
-### Overall: Phase 0 shell + colour done (view split open), Phase 2 surface started, Phases 1/3 not started
+### Overall: Phase 0 shell + colour done (view split open), Phase 1 core done, Phase 2 surface started, Phase 3 not started
 
 | Phase | Scope | Status |
 | ----- | ----- | ------ |
 | 0 | Shell core + command surface + terminal UI | Shell done (~150 commands incl. cmdlets), ANSI colour + grid model done; only the view split is open |
-| 1 | Time Machine history (SQLite) | Not started - `Sources/Terminal-ios/History/` does not exist |
+| 1 | Time Machine history | Core landed: structured snapshots recorded by the engine, ranked search, `tm show/page/replay/pin/export`, 64 KB output cap. Still open: a SQLite-backed `HistoryStore`, re-enter (restore cwd/env) as a key binding, and the snapshot-card UI |
 | 2 | Runtimes + package catalogs | Catalog, mirrors, `apt`/`apk`/`pip`/`winget`, digest verification and the **WASM interpreter** landed; CPython and MinGW payloads still to build |
 | 3 | Release hardening | Not started |
 
@@ -648,10 +675,13 @@ Sources/Terminal-ios/
   WebAssembly/
     WasmModule.swift, WasmInstruction.swift, WasmInstance.swift,
     WasmWASI.swift, WasmRuntime.swift
+  History/                                       # Phase 1: snapshots + search
+    HistoryEntry.swift, HistoryStore.swift, HistorySearch.swift
 Sources/Terminal-iosTests/
   ShellEngineTests, ShellParserTests, ShellTokenizerTests, BuiltinsTests,
   ShellScriptTests, PackageManagerTests, TerminalScreenTests, WebAssemblyTests,
-  PowerShellTests, SourcePolicyTests, TerminalViewControllerTests, WasmFixtures
+  PowerShellTests, SourcePolicyTests, PagerTests, HistoryTests,
+  TerminalViewControllerTests, WasmFixtures
 Sources/Terminal-iosUITests/AppUITests.swift
 catalog/catalog.json + catalog/payloads/*             # package source of truth
 support/generate_catalog.py                          # regenerates BundledCatalog.swift
