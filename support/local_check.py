@@ -1036,6 +1036,45 @@ do {
     _ = root
 }
 
+// --- awk, the pattern-action processor ------------------------------------------
+do {
+    let (engine, _) = makeEngine()
+    engine.run("printf 'one two three\\ntwo two four\\nfive six seven\\n' > aw.txt")
+
+    // The default action of a bare pattern is `print $0`.
+    check("awk regex pattern", "two two four", engine.run("awk '/four/' aw.txt").output)
+    // Fields: $1, $2, $NF.
+    check("awk fields", "one\ntwo\nfive", engine.run("awk '{ print $1 }' aw.txt").output)
+    check("awk second field", "two\ntwo\nsix", engine.run("awk '{ print $2 }' aw.txt").output)
+    check("awk NF", "3\n3\n3", engine.run("awk '{ print NF }' aw.txt").output)
+    check("awk last field", "three\nfour\nseven", engine.run("awk '{ print $NF }' aw.txt").output)
+    // NR and a condition.
+    check("awk NR", "1\n2\n3", engine.run("awk '{ print NR }' aw.txt").output)
+    check("awk condition", "four\nseven", engine.run("awk 'NR > 1 { print $3 }' aw.txt").output)
+    // BEGIN / END.
+    check("awk BEGIN", "start\none\ntwo\nfive\nend", engine.run("awk 'BEGIN { print \"start\" } { print $1 } END { print \"end\" }' aw.txt").output)
+    // FS via -F.
+    check("awk -F", "one\ntwo\nfive", engine.run("awk -F' ' '{ print $1 }' aw.txt").output)
+    check("awk -F comma", "a\nc", engine.run("printf 'a,b\\nc,d\\n' | awk -F, '{ print $1 }'").output)
+    // OFS: reassigning fields rejoins with the output separator.
+    check("awk OFS", "x-y", engine.run("printf 'a b\\n' | awk 'BEGIN { OFS = \"-\" } { $1 = \"x\"; $2 = \"y\"; print }'").output)
+    // Assignment and arithmetic.
+    check("awk sum", "6", engine.run("printf '1\\n2\\n3\\n' | awk '{ s += $1 } END { print s }'").output)
+    // if / else.
+    check("awk if", "big", engine.run("printf '10\\n' | awk '{ if ($1 > 5) print \"big\"; else print \"small\" }'").output)
+    // printf with a format.
+    check("awk printf", "02", engine.run("printf '2\\n' | awk '{ printf \"%02d\", $1 }'").output)
+    // Built-in functions.
+    check("awk length", "3", engine.run("printf 'abc\\n' | awk '{ print length($0) }'").output)
+    check("awk substr", "bc", engine.run("printf 'abc\\n' | awk '{ print substr($0, 2, 2) }'").output)
+    check("awk toupper", "ABC", engine.run("printf 'abc\\n' | awk '{ print toupper($0) }'").output)
+    // A compound pattern with &&.
+    check("awk and", "two two four\nfive six seven", engine.run("awk 'NR >= 2 && NR <= 3 { print }' aw.txt").output)
+    // next skips the rest of the record.
+    check("awk next", "two\nfive", engine.run("awk 'NR == 1 { next } { print $1 }' aw.txt").output)
+    // A missing field reads as empty.
+    check("awk missing field", "", engine.run("printf 'a\\n' | awk '{ print $5 }'").output)
+}
 print("")
 print("checks: \(checks), failures: \(failures)")
 exit(failures == 0 ? 0 : 1)

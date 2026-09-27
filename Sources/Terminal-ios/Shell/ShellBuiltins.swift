@@ -26,7 +26,7 @@ enum ShellBuiltins {
         let groups = FileBuiltins.all + TextBuiltins.all + SystemBuiltins.all
             + PowerShellBuiltins.all + WingetBuiltin.all + WasmBuiltin.all
             + PagerBuiltins.all + TimeMachineBuiltin.all
-            + EdBuiltin.all + TopBuiltin.all + TarBuiltin.all
+            + EdBuiltin.all + TopBuiltin.all + TarBuiltin.all + AwkBuiltin.all
         for builtin in groups {
             result[builtin.name] = builtin
         }
@@ -101,7 +101,7 @@ enum ShellBuiltins {
     private static var groups: [(title: String, names: [String])] {
         [
             ("files", FileBuiltins.all.map(\.name)),
-            ("text", TextBuiltins.all.map(\.name)),
+            ("text", TextBuiltins.all.map(\.name) + AwkBuiltin.all.map(\.name)),
             ("system", SystemBuiltins.all.map(\.name)),
             ("packages", WingetBuiltin.all.map(\.name)),
             ("runtimes", WasmBuiltin.all.map(\.name)),

@@ -168,6 +168,9 @@ Engineering rules that follow from the table:
     - `TextSed` - the `sed` program, kept apart from the built-in that drives
       it because splitting a script into commands (ignoring `;` inside an
       `s///` body or a regex address) is the easy part to get wrong
+    - `TextAwk` - the `awk` interpreter (tokenizer, parser and executor in one
+      file), cross-checked against `gawk`; `BuiltinsAwk` is the thin command
+      driver
     - `BuiltinsTar` - `tar`, ustar only, with the model (`TarArchive`) split out
       so the bytes can be cross-checked against Python's `tarfile`
     - `ShellBuiltins` - the merged command table plus `help` text
@@ -282,6 +285,9 @@ Engineering rules that follow from the table:
   `sort` (`-nruf`) `uniq` (`-cdu`) `cut` (`-d -f -c`)
   `tr` (`-d -s`, ranges) `tee` (`-a`) `nl` `rev` `tac` `seq` `yes` `base64` (`-d`)
   `sha256sum` `sha1sum` `md5sum` `cksum` `diff` `strings`
+  `awk` (pattern-action: fields `$0`..`$NF`, `NR`/`NF`/`FS`/`OFS`/`RS`/`ORS`,
+  `BEGIN`/`END`, `if`/`else`/`while`/`next`/`exit`, `print`/`printf`, and
+  `length`/`substr`/`int`/`split`/`toupper`/`tolower`/`sprintf`)
 - **system** - `whoami` `id` `uname` (`-a -m -s -r`) `hostname` `arch` `nproc`
   `date` (+strftime subset) `uptime` `sleep` `tty` `ps` `kill` `free`
   `env` `printenv` `unset` `set` `export` `read` `true` `false` `test` `[`
@@ -582,7 +588,7 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
   it turns a 12-minute CI round trip into a 40-second loop:
 
   ```bash
-  python support/local_check.py          # 427 scenarios, fails loudly on regressions
+  python support/local_check.py          # 447 scenarios, fails loudly on regressions
   ```
 
   It copies `Shell/`, `Packages/`, `WebAssembly/` and the model half of `Terminal/` into a
@@ -708,7 +714,7 @@ Sources/Terminal-iosTests/
   ShellEngineTests, ShellParserTests, ShellTokenizerTests, BuiltinsTests,
   ShellScriptTests, PackageManagerTests, TerminalScreenTests, WebAssemblyTests,
   PowerShellTests, SourcePolicyTests, PagerTests, HistoryTests, EditorTests,
-  TarTests,
+  TarTests, AwkTests,
   TerminalViewControllerTests, WasmFixtures
 Sources/Terminal-iosUITests/AppUITests.swift
 catalog/catalog.json + catalog/payloads/*             # package source of truth
