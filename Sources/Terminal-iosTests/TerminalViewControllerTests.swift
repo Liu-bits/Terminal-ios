@@ -60,19 +60,26 @@ struct TerminalViewControllerTests {
     func pagerWiring() {
         let controller = TerminalViewController()
         controller.loadViewIfNeeded()
+        // Escapes are stripped for the assertions: the pager draws in reverse
+        // video, and an escape in the middle of the text would hide it.
+        let screen = { ANSIParser.strip(controller.outputLabel.text ?? "") }
+
         controller.submit("printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' > pager.txt")
         controller.submit("less pager.txt")
-        #expect(controller.isShowingPager)
+        #expect(controller.isShowingPager, "the pager did not take the screen; screen=\(screen())")
         // The status line is what proves the screen belongs to the pager now.
-        #expect(controller.outputLabel.text?.contains("1-7/7") == true)
+        #expect(screen().contains("1-7/7"), "screen=\(screen())")
+        #expect(screen().contains("q:quit"), "screen=\(screen())")
+
         // Keys from the accessory bar reach the pager instead of the shell.
         controller.handleKey(" ")
         #expect(controller.isShowingPager)
         controller.handleKey("q")
         #expect(controller.isShowingPager == false)
+
         // And the shell is usable again, with the main screen intact.
         controller.submit("echo after")
-        #expect(controller.outputLabel.text?.hasSuffix("after") == true)
-        #expect(controller.outputLabel.text?.contains("$ less pager.txt") == true)
+        #expect(screen().hasSuffix("after"), "screen=\(screen())")
+        #expect(screen().contains("$ less pager.txt"), "screen=\(screen())")
     }
 }

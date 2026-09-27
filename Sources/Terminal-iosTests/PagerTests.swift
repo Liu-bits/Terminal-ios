@@ -36,6 +36,12 @@ struct PagerTests {
         }
     }
 
+    /// The frame as a reader sees it: escapes removed, so a highlight cannot
+    /// hide the text it is wrapped around.
+    private func plain(_ step: InteractiveStep) -> String {
+        ANSIParser.strip(text(step))
+    }
+
     @Test("A pager takes the screen at the top level and shows a page")
     func opensOnTheAlternateScreen() throws {
         let engine = makeEngine(lines: "l1\nl2\nl3\nl4\nl5\nl6")
@@ -94,13 +100,18 @@ struct PagerTests {
         #expect(text(erased).contains("/c"))
         session.handle(key: "h")
         let found = session.handle(key: InteractiveKey.enter)
-        #expect(text(found).contains("\u{1B}[7mcharlie"))
-        #expect(text(found).contains("not found") == false)
+        // The highlight wraps only the matched text, which splits the word in the
+        // raw frame: `\e[7mch\e[27marlie`. Asserting on the stripped frame is what
+        // a reader sees, and keeps the assertion about content rather than about
+        // where the escapes land.
+        #expect(text(found).contains("\u{1B}[7mch"))
+        #expect(plain(found).contains("charlie"))
+        #expect(plain(found).contains("not found") == false)
         // `n` finds the next match, and wraps with a note when there is none.
         session.handle(key: "g")
-        #expect(text(session.handle(key: "n")).contains("charlie"))
+        #expect(plain(session.handle(key: "n")).contains("charlie"))
         let wrapped = session.handle(key: "n")
-        #expect(text(wrapped).contains("charlie"))
+        #expect(plain(wrapped).contains("charlie"))
         // A pattern that is nowhere says so instead of pretending.
         session.handle(key: "/")
         session.handle(key: "z")

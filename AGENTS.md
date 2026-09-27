@@ -410,6 +410,11 @@ commands work the other way round instead: the command hands back a session.
   characters, Return and the accessory bar all go to `send(key:)` instead of the
   shell line, the prompt turns into `:` with a key hint, and quitting restores
   the main screen (and the shell).
+- When a test asserts on a frame, assert on `ANSIParser.strip(frame)`. Pager
+  highlighting wraps only the matched text, so the raw frame contains
+  `ESC[7mch ESC[27marlie` and a `contains("charlie")` check on raw text fails -
+  which is a wrong assertion, not a broken pager. Assert on the escapes directly
+  only when the escape *is* the thing under test.
 - Screen size comes from `$LINES`/`$COLUMNS`, which the view controller updates
   from the measured font metrics; `ShellRunContext.terminalRows/Columns` read
   them with 24x80 fallbacks.
