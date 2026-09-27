@@ -177,13 +177,69 @@ struct TerminalScreenTests {
         #expect(screen.plainText == "dir file")
     }
 
+    @Test("The scrolling region holds everything outside it still")
+    func scrollingRegion() {
+        var screen = TerminalScreen(columns: 10, rows: 4, scrollbackLimit: 8)
+        screen.write("top\n")
+        screen.write("\u{1B}[2;3r\u{1B}[2;1H")
+        #expect(screen.scrollTop == 1 && screen.scrollBottom == 2)
+        screen.write("x\ny\nz")
+        // Row 0 was outside the region, so it must not have moved, and a band
+        // scroll must not invent scrollback entries.
+        #expect(screen.plainText == "top\ny\nz")
+        #expect(screen.scrollback.isEmpty)
+
+        // `CSI r` with no parameters goes back to the whole screen.
+        screen.write("\u{1B}[r")
+        #expect(screen.scrollTop == 0 && screen.scrollBottom == 3)
+    }
+
+    @Test("Origin mode addresses rows relative to the region")
+    func originMode() {
+        var screen = TerminalScreen(columns: 10, rows: 5, scrollbackLimit: 4)
+        screen.write("a\nb\nc\nd\ne")
+        screen.write("\u{1B}[3;5r\u{1B}[?6h")
+        #expect(screen.originMode && screen.cursorRow == 2)
+        screen.write("\u{1B}[1;1HX")
+        #expect(screen.plainText == "a\nb\nX\nd\ne")
+        // Row parameters are clamped to the region while origin mode is on.
+        screen.write("\u{1B}[9;1HY")
+        #expect(screen.plainText == "a\nb\nX\nd\nY")
+        screen.write("\u{1B}[?6l")
+        #expect(screen.originMode == false && screen.cursorRow == 0)
+    }
+
+    @Test("The alternate screen gives the main one back untouched")
+    func alternateScreen() {
+        var screen = TerminalScreen(columns: 20, rows: 3, scrollbackLimit: 8)
+        screen.write("main one\nmain two")
+        screen.write("\u{1B}[?1049h")
+        #expect(screen.isAlternateScreen)
+        #expect(screen.plainText.isEmpty)
+        screen.write("full screen app")
+        #expect(screen.plainText == "full screen app")
+        screen.write("\u{1B}[?1049l")
+        #expect(screen.isAlternateScreen == false)
+        #expect(screen.plainText == "main one\nmain two")
+        // ?47 is the older spelling of the same switch.
+        screen.write("\u{1B}[?47h")
+        #expect(screen.isAlternateScreen)
+        screen.write("\u{1B}[?47l")
+        #expect(screen.plainText == "main one\nmain two")
+    }
+
     @Test("Sequences we do not implement are recorded, not swallowed")
     func unsupportedSequences() {
         var screen = TerminalScreen(columns: 20, rows: 4, scrollbackLimit: 4)
+        screen.write("\u{1B}[?5h")        // DECSCNM: reverse video
+        screen.write("\u{1B}[?1004h")     // focus reporting
+        #expect(screen.unsupported.contains { $0.contains("private mode") })
+        // The region and the alternate buffer are implemented, so they must not
+        // show up here any more.
         screen.write("\u{1B}[1;5r")
         screen.write("\u{1B}[?1049h")
-        #expect(screen.unsupported.contains { $0.contains("scrolling region") })
-        #expect(screen.unsupported.contains { $0.contains("alternate screen") })
+        #expect(screen.unsupported.contains { $0.contains("scrolling region") } == false)
+        #expect(screen.unsupported.contains { $0.contains("alternate screen") } == false)
     }
 
     @Test("TerminalOutput keeps the view state together")

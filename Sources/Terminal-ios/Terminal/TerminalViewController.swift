@@ -200,7 +200,7 @@ final class TerminalViewController: UIViewController {
 
     private func appendLine(_ text: String) {
         output.appendLine(text)
-        render(text)
+        render(announcing: text)
     }
 
     private func render(announcing announcement: String? = nil) {

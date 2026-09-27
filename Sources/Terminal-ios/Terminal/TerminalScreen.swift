@@ -43,6 +43,31 @@ struct TerminalScreen {
     private(set) var cursorVisible = true
     private(set) var style = TerminalStyle.plain
 
+    /// Scrolling region (`CSI r`), inclusive. Only a full-screen region feeds
+    /// the scrollback, because a partial scroll does not move history off the
+    /// screen - it just rotates a band inside it.
+    private(set) var scrollTop = 0
+    private(set) var scrollBottom = 23
+
+    /// Origin mode (`?6h`): when set, row addressing is relative to `scrollTop`.
+    private(set) var originMode = false
+
+    /// The alternate screen buffer (`?1049h`), used by full-screen tools.
+    private(set) var isAlternateScreen = false
+    private var savedMainScreen: MainScreenState?
+
+    /// The main screen, parked while the alternate buffer is in use.
+    private struct MainScreenState {
+        var grid: [[TerminalCell]]
+        var scrollback: [[TerminalCell]]
+        var cursorRow: Int
+        var cursorColumn: Int
+        var style: TerminalStyle
+        var originMode: Bool
+        var scrollTop: Int
+        var scrollBottom: Int
+    }
+
     /// Control sequences we recognised but do not implement, in order.
     private(set) var unsupported: [String] = []
 
@@ -60,6 +85,80 @@ struct TerminalScreen {
             repeating: Array(repeating: TerminalCell.blank, count: max(1, columns)),
             count: max(1, rows)
         )
+        self.scrollBottom = max(1, rows) - 1
+    }
+
+    // MARK: - Alternate screen
+
+    /// `CSI ?1049h`: park the main screen and start on a blank one.
+    ///
+    /// Tools that draw a full-screen UI use it so the user's scrollback is
+    /// exactly as they left it when the tool exits.
+    mutating func enterAlternateScreen() {
+        guard !isAlternateScreen else {
+            return
+        }
+        savedMainScreen = MainScreenState(
+            grid: grid,
+            scrollback: scrollback,
+            cursorRow: cursorRow,
+            cursorColumn: cursorColumn,
+            style: style,
+            originMode: originMode,
+            scrollTop: scrollTop,
+            scrollBottom: scrollBottom
+        )
+        isAlternateScreen = true
+        grid = blankGrid()
+        scrollback = []
+        cursorRow = 0
+        cursorColumn = 0
+        originMode = false
+        scrollTop = 0
+        scrollBottom = rows - 1
+        style = .plain
+        pendingWrap = false
+    }
+
+    /// `CSI ?1049l`: put the main screen back, cursor and all.
+    mutating func leaveAlternateScreen() {
+        guard isAlternateScreen else {
+            return
+        }
+        isAlternateScreen = false
+        if let saved = savedMainScreen {
+            grid = saved.grid
+            scrollback = saved.scrollback
+            cursorRow = min(rows - 1, saved.cursorRow)
+            cursorColumn = min(columns - 1, saved.cursorColumn)
+            style = saved.style
+            originMode = saved.originMode
+            scrollTop = saved.scrollTop
+            scrollBottom = saved.scrollBottom
+            savedMainScreen = nil
+        }
+        pendingWrap = false
+    }
+
+    // MARK: - Scrolling region
+
+    /// `CSI t;b r`: restrict scrolling to rows `t...b` (1-based, inclusive).
+    ///
+    /// A missing or zero parameter means the edge of the screen, which is how
+    /// `CSI r` alone resets the region.
+    private mutating func setScrollingRegion(top: Int?, bottom: Int?) {
+        let newTop = max(0, min(rows - 1, (top ?? 1) - 1))
+        let newBottom = max(0, min(rows - 1, (bottom ?? rows) - 1))
+        guard newTop < newBottom else {
+            // An inverted region is ignored rather than applied backwards.
+            return
+        }
+        scrollTop = newTop
+        scrollBottom = newBottom
+        // xterm homes the cursor to the region.
+        cursorRow = originMode ? scrollTop : 0
+        cursorColumn = 0
+        pendingWrap = false
     }
 
     // MARK: - Writing
@@ -162,6 +261,11 @@ struct TerminalScreen {
         cursorVisible = true
         savedCursor = nil
         unsupported = []
+        savedMainScreen = nil
+        isAlternateScreen = false
+        originMode = false
+        scrollTop = 0
+        scrollBottom = rows - 1
         clear()
     }
 
@@ -183,6 +287,11 @@ struct TerminalScreen {
         rows = height
         cursorRow = min(cursorRow, height - 1)
         cursorColumn = min(cursorColumn, width - 1)
+        // The old region may not exist any more; a fresh geometry means a
+        // full-screen region, like a real terminal after a resize.
+        scrollTop = 0
+        scrollBottom = height - 1
+        originMode = false
         pendingWrap = false
     }
 
@@ -315,34 +424,52 @@ struct TerminalScreen {
 
     // MARK: - Cursor and erasing
 
-    /// Moves to the start of the next row, scrolling when already at the bottom.
+    /// Moves to the start of the next row, scrolling at the bottom of the
+    /// scrolling region.
     private mutating func newLine() {
         cursorColumn = 0
         pendingWrap = false
-        cursorRow += 1
-        if cursorRow >= rows {
-            scrollUp(lines: 1)
-            cursorRow = rows - 1
+        if cursorRow < scrollBottom {
+            cursorRow += 1
+            return
         }
+        if cursorRow > scrollBottom {
+            // Below the region: the cursor stops at the last row instead of
+            // scrolling, which is what xterm does.
+            cursorRow = rows - 1
+            return
+        }
+        scrollUp(lines: 1)
     }
 
+    private var blankRow: [TerminalCell] {
+        Array(repeating: TerminalCell.blank, count: columns)
+    }
+
+    /// Scrolls the region up: rows move towards `scrollTop`, blanks enter at
+    /// `scrollBottom`.
+    ///
+    /// Only a full-screen region records scrollback. A band scroll (`CSI r` plus
+    /// output) rotates rows that are still on screen, so treating it as history
+    /// would duplicate them.
     private mutating func scrollUp(lines count: Int) {
+        let full = scrollTop == 0 && scrollBottom == rows - 1
         for _ in 0..<max(1, count) {
-            let row = grid.removeFirst()
-            if scrollbackLimit > 0, row.contains(where: { !$0.isBlank }) {
+            let row = grid.remove(at: scrollTop)
+            if full, scrollbackLimit > 0, row.contains(where: { !$0.isBlank }) {
                 scrollback.append(row)
                 if scrollback.count > scrollbackLimit {
                     scrollback.removeFirst(scrollback.count - scrollbackLimit)
                 }
             }
-            grid.append(Array(repeating: TerminalCell.blank, count: columns))
+            grid.insert(blankRow, at: scrollBottom)
         }
     }
 
     private mutating func scrollDown(lines count: Int) {
         for _ in 0..<max(1, count) {
-            grid.removeLast()
-            grid.insert(Array(repeating: TerminalCell.blank, count: columns), at: 0)
+            grid.remove(at: scrollBottom)
+            grid.insert(blankRow, at: scrollTop)
         }
     }
 
@@ -353,10 +480,29 @@ struct TerminalScreen {
                 cursorVisible = true
             case ("l", 25):
                 cursorVisible = false
-            case ("h", 1049), ("l", 1049), ("h", 1047), ("l", 1047):
-                // Alternate screen: the app has one screen, so a tool asking for
-                // the alternate buffer keeps drawing on the main one.
-                record(sequence, reason: "alternate screen buffer")
+            case ("h", 6):
+                // Origin mode: row addressing starts at the region top.
+                originMode = true
+                cursorRow = scrollTop
+                cursorColumn = 0
+                pendingWrap = false
+            case ("l", 6):
+                originMode = false
+                cursorRow = 0
+                cursorColumn = 0
+                pendingWrap = false
+            case ("h", 1049), ("h", 1047):
+                enterAlternateScreen()
+            case ("l", 1049), ("l", 1047):
+                leaveAlternateScreen()
+            case ("h", 47):
+                enterAlternateScreen()
+            case ("l", 47):
+                leaveAlternateScreen()
+            case ("h", 1), ("l", 1), ("h", 12), ("l", 12), ("h", 7), ("l", 7):
+                // DECCKM / cursor blink / autowrap: the app drives input itself
+                // and always wraps, so these are accepted and ignored.
+                break
             case ("h", _), ("l", _):
                 record(sequence, reason: "private mode")
             default:
@@ -392,9 +538,9 @@ struct TerminalScreen {
             cursorColumn = min(columns - 1, max(0, first - 1))
             pendingWrap = false
         case "d":
-            cursorRow = min(rows - 1, max(0, first - 1))
+            cursorRow = addressRow(first)
         case "H", "f":
-            cursorRow = min(rows - 1, max(0, sequence.parameter(0, default: 1) - 1))
+            cursorRow = addressRow(sequence.parameter(0, default: 1))
             cursorColumn = min(columns - 1, max(0, sequence.parameter(1, default: 1) - 1))
             pendingWrap = false
         case "J":
@@ -425,12 +571,20 @@ struct TerminalScreen {
                 pendingWrap = false
             }
         case "r":
-            record(sequence, reason: "scrolling region")
+            setScrollingRegion(top: sequence.parameter(0), bottom: sequence.parameter(1))
         case "h", "l":
             record(sequence, reason: "mode")
         default:
             record(sequence, reason: "unhandled sequence")
         }
+    }
+
+    /// Resolves a 1-based row parameter, honouring origin mode and clamping to
+    /// the scrolling region when origin mode is on.
+    private func addressRow(_ parameter: Int) -> Int {
+        let base = originMode ? scrollTop : 0
+        let limit = originMode ? scrollBottom : rows - 1
+        return min(limit, max(base, base + max(1, parameter) - 1))
     }
 
     private mutating func eraseDisplay(mode: Int) {
@@ -473,16 +627,28 @@ struct TerminalScreen {
     }
 
     private mutating func insertLines(count: Int) {
+        guard cursorRow >= scrollTop, cursorRow <= scrollBottom else {
+            return
+        }
         for _ in 0..<max(1, count) {
-            grid.insert(Array(repeating: TerminalCell.blank, count: columns), at: cursorRow)
-            grid.removeLast()
+            grid.insert(blankRow, at: cursorRow)
+            // The row pushed past the bottom of the region falls off; content
+            // below the region must not move.
+            if scrollBottom + 1 < rows {
+                grid.remove(at: scrollBottom + 1)
+            } else {
+                grid.removeLast()
+            }
         }
     }
 
     private mutating func deleteLines(count: Int) {
+        guard cursorRow >= scrollTop, cursorRow <= scrollBottom else {
+            return
+        }
         for _ in 0..<max(1, count) {
             grid.remove(at: cursorRow)
-            grid.append(Array(repeating: TerminalCell.blank, count: columns))
+            grid.insert(blankRow, at: scrollBottom)
         }
     }
 

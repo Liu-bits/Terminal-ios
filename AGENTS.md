@@ -291,18 +291,27 @@ and `support/local_check.py` compiles it on Windows.
   `ls -l` out of alignment: CJK/Hangul/emoji are 2 columns, combining marks 0.
 - `TerminalScreen` - a real grid, not a line buffer: cursor addressing
   (`A B C D E F G d H f`), erasing (`J K X P @`), line editing (`L M S T`),
-  save/restore (`s u`), cursor visibility (`?25h/l`), wrapping, scrolling with
-  scrollback, and wide cells that render once instead of leaving a gap.
+  save/restore (`s u`), cursor visibility (`?25h/l`), the scrolling region
+  (`CSI r`, with origin mode `?6h`), the alternate screen buffer (`?1049`/`?47`),
+  wrapping, scrolling with scrollback, and wide cells that render once instead of
+  leaving a gap.
   C0 controls are handled: `\r` overwrites, `\t` goes to the next multiple of
   eight, `\b` steps back, and `\n` behaves as CR+LF - the `ONLCR` translation a
   tty would normally do, which this grid has to do itself.
 - Colours reach the view as `[[ANSISegment]]`; `TerminalViewController` maps
   them to `UIColor`. Palette 0 and 8 would be invisible on black, so they render
   as greys.
-- **Not supported, and not silently**: the scrolling region (`CSI r`, used by
-  `less`/`vim`) and the alternate screen buffer (`?1049h`). Both are recorded in
-  `TerminalScreen.unsupported` with their sequence and a reason, so a missing
-  feature shows up as data instead of a wrong-looking screen.
+Two rules keep the grid honest:
+
+- Scrollback only records a **full-screen** scroll. A band scroll (`CSI r` plus
+  output) rotates rows that are still on screen, so filing them as history would
+  duplicate them.
+- Anything still unimplemented is recorded in `TerminalScreen.unsupported` with
+  the sequence and a reason, instead of being silently dropped: right now that is
+  reverse video (`?5h`), focus reporting (`?1004h`) and other modes the app does
+  not act on. `less`/`vim` need `?1049` and `CSI r`, and both are implemented -
+  what is still missing for them is a way for a command to *read keystrokes*,
+  which the synchronous engine does not offer yet.
 
 Colour policy for commands (`ColorPolicy`, shared by `ls` and `grep`):
 
@@ -593,9 +602,10 @@ support/push_via_api.py                              # push path when `git push`
    scrollback) and `AccessoryKeyBar`; the controller already mixes layout with
    execution. The screen model it draws is done and tested, so this is a straight
    refactor with no behaviour change.
-2. The scrolling region and the alternate screen buffer (`CSI r`, `?1049h`) are
-   recorded as unsupported. Implementing them is what `less`/`vim` need; do it in
-   `TerminalScreen.apply` and add scenarios next to the existing ones.
+2. Interactive commands: the grid now supports the alternate screen and the
+   scrolling region, so `less`/`vim`-style tools are blocked only by the engine
+   being synchronous. Adding an input channel (the UI feeds keys into a running
+   command) is what unlocks a pager - do it before promising `less`.
 3. Phase 2 core: the WASM interpreter landed (see the section above). Next is to
    make it complete enough for real payloads - build a CPython-for-WASM module,
    put it in the catalog, and fix whatever the interpreter turns out to be

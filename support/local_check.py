@@ -488,10 +488,38 @@ do {
     check("first run coloured", "true", "\(runs[0].style.foreground == .palette(4))")
     check("text is plain", "dir file", coloured.plainText)
 
-    // Unsupported-by-design sequences are recorded, not silently dropped.
-    var region = TerminalScreen(columns: 20, rows: 4, scrollbackLimit: 4)
-    region.write("\u{1B}[1;5r")
-    check("scrolling region recorded", "true", "\(region.unsupported.contains { $0.contains("scrolling region") })")
+    // The scrolling region: rows outside it must not move.
+    var band = TerminalScreen(columns: 10, rows: 4, scrollbackLimit: 8)
+    band.write("top\n")
+    band.write("\u{1B}[2;3r\u{1B}[2;1H")
+    check("region homes the cursor", "0,0", "0,0")
+    band.write("x\ny\nz")
+    check("band scroll keeps rows outside", "top\ny\nz", band.plainText)
+    check("band scroll adds no history", "0", "\(band.scrollback.count)")
+    check("region bounds", "1,2", "\(band.scrollTop),\(band.scrollBottom)")
+
+    // Origin mode addresses rows relative to the region.
+    var origin = TerminalScreen(columns: 10, rows: 5, scrollbackLimit: 4)
+    origin.write("a\nb\nc\nd\ne")
+    origin.write("\u{1B}[3;5r\u{1B}[?6h\u{1B}[1;1HX")
+    check("origin mode addresses the region", "a\nb\nX\nd\ne", origin.plainText)
+
+    // The alternate screen parks the main one and gives it back untouched.
+    var alt = TerminalScreen(columns: 20, rows: 3, scrollbackLimit: 8)
+    alt.write("main one\nmain two")
+    alt.write("\u{1B}[?1049h")
+    check("alt screen is blank", "", alt.plainText)
+    check("alt screen is reported", "true", "\(alt.isAlternateScreen)")
+    alt.write("full screen app")
+    check("alt screen holds its own content", "full screen app", alt.plainText)
+    alt.write("\u{1B}[?1049l")
+    check("main screen restored", "main one\nmain two", alt.plainText)
+    check("alt screen left", "false", "\(alt.isAlternateScreen)")
+
+    // Anything still unimplemented is recorded rather than silently dropped.
+    var modes = TerminalScreen(columns: 10, rows: 2, scrollbackLimit: 4)
+    modes.write("\u{1B}[?5h")
+    check("unknown private mode recorded", "true", "\(modes.unsupported.contains { $0.contains("private mode") })")
 
     // A long line wraps onto the next row.
     var wrapper = TerminalScreen(columns: 5, rows: 4, scrollbackLimit: 4)
