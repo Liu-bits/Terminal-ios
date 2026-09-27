@@ -235,13 +235,26 @@ def memory_module() -> bytes:
         0x20, 0x00,              # local.get 0 (offset inside the data)
         0x2D, 0x00, 0x00,        # i32.load8_u offset=0
     ])
+    # `poke(addr, value)` stores where asked, which roundtrip cannot: its address
+    # is the constant 0, so passing a huge argument just stores a huge value and
+    # an out-of-bounds test written against it never traps.
+    poke = bytes([
+        0x20, 0x00,              # local.get 0   (address)
+        0x20, 0x01,              # local.get 1   (value)
+        0x36, 0x02, 0x00,        # i32.store align=2 offset=0
+        0x41, 0x01,              # i32.const 1
+    ])
     # `pages` takes no parameters - JS pads a missing argument with 0, so the
     # old (I32) -> I32 signature passed under Node while a real caller with
     # correct arity checking traps. Declare it as () -> I32.
     return module(
-        types=[functype([I32], [I32]), functype([], [I32])],
+        types=[
+            functype([I32], [I32]),
+            functype([], [I32]),
+            functype([I32, I32], [I32]),        # poke
+        ],
         imports=[],
-        defined_types=[0, 0, 1, 1],
+        defined_types=[0, 0, 1, 1, 2],
         memories=[memory(1, 4)],
         globals_=[],
         exports=[
@@ -250,12 +263,14 @@ def memory_module() -> bytes:
             export("byte_at", 0, 1),
             export("pages", 0, 2),
             export("grow", 0, 3),
+            export("poke", 0, 4),
         ],
         bodies=[
             body([], code),
             body([], read_string),
             body([], bytes([0x3F, 0x00])),      # memory.size  (index byte included)
             body([], bytes([0x41, 0x01, 0x40, 0x00])),   # i32.const 1; memory.grow
+            body([], poke),
         ],
         datas=[data_segment(16, b"wasm-data\n")],
     )
@@ -405,6 +420,15 @@ try {
   if (instance.exports.roundtrip) info.results.roundtrip = instance.exports.roundtrip(123456);
   if (instance.exports.byte_at) info.results.byte0 = instance.exports.byte_at(16);
   if (instance.exports.pages) info.results.pages = instance.exports.pages();
+  if (instance.exports.poke) {
+    info.results.poke = instance.exports.poke(4, 7);
+    try {
+      // Run this while memory is still one page: the grow below would make
+      // 70000 a perfectly valid address and hide the trap.
+      instance.exports.poke(70000, 1);
+      info.results.pokeOutOfBounds = "NO TRAP";
+    } catch (error) { info.results.pokeOutOfBounds = String(error); }
+  }
   if (instance.exports.grow) {
     try { info.results.grow = instance.exports.grow(); }
     catch (error) { info.results.growError = String(error); }

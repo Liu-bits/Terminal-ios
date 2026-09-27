@@ -102,6 +102,21 @@ func checkExit(_ label: String, _ expected: Int, _ actual: Int) {
     }
 }
 
+/// Text carried by an interactive step, whichever kind it is.
+func stepText(_ step: InteractiveStep) -> String {
+    switch step {
+    case .frame(let text): return text
+    case .finished(let text, _): return text
+    }
+}
+
+func isFinished(_ step: InteractiveStep) -> Bool {
+    if case .finished = step {
+        return true
+    }
+    return false
+}
+
 // --- simple commands ---------------------------------------------------------
 do {
     let (engine, _) = makeEngine()
@@ -396,6 +411,17 @@ do {
         check("wasm memory.size", "1", "\(try memory.invoke(export: "pages").first?.description ?? "?")")
         check("wasm memory.grow", "1", "\(try memory.invoke(export: "grow").first?.description ?? "?")")
         check("wasm memory grew", "2", "\(try memory.invoke(export: "pages").first?.description ?? "?")")
+        check("wasm poke writes", "1", "\(try memory.invoke(export: "poke", arguments: [.i32(4), .i32(9)]).first?.description ?? "?")")
+        check("wasm poke read back", "9", "\(try memory.invoke(export: "byte_at", arguments: [.i32(4)]).first?.description ?? "?")")
+        // The bounds check has to trap rather than scribble past the end.
+        var oob = "no trap"
+        do {
+            // Past the two pages `grow` already added.
+            _ = try memory.invoke(export: "poke", arguments: [.i32(999999), .i32(1)])
+        } catch let trap as WasmTrap {
+            oob = trap.message
+        }
+        check("wasm out-of-bounds traps", "true", "\(oob.contains("out of bounds"))")
 
         var trapped = "no trap"
         do {
@@ -597,6 +623,98 @@ do {
     check("sed -i says why", "true", "\(engine.run("sed -i 's/a/A/' l.txt").output.contains("-i"))")
     checkExit("sed bad command is refused", 2, engine.run("sed 'Z' l.txt").exitCode)
     check("sed still works after refusal", "A\nb\nc\nd", engine.run("sed 's/a/A/' l.txt").output)
+}
+
+// --- interactive sessions and the pager ---------------------------------------
+do {
+    let (engine, _) = makeEngine()
+    engine.run("printf 'l1\nl2\nl3\nl4\nl5\nl6\n' > big.txt")
+    // The screen size comes from the environment, so a test can pin it.
+    engine.environment.variables["LINES"] = "4"
+    engine.environment.variables["COLUMNS"] = "40"
+
+    // A pipe means no screen: the pager copies its input, like the real thing.
+    check("less in a pipe copies", "true", "\(engine.run("cat big.txt | less").output.contains("l1"))")
+    check("less in a pipe has no session", "true", "\(engine.run("cat big.txt | less").session == nil)")
+
+    // Nor does a script get one, even when the script line came from the top.
+    engine.run("printf 'less big.txt\n' > pager.sh")
+    if case .finished(let scripted) = engine.runInteractive("sh pager.sh") {
+        check("less in a script copies", "true", "\(scripted.output.contains("l1"))")
+        check("less in a script has no session", "true", "\(scripted.session == nil)")
+    } else {
+        check("less in a script copies", "finished", "interactive")
+    }
+
+    // At the top level it takes the screen.
+    switch engine.runInteractive("less big.txt") {
+    case .finished:
+        check("less opens a session", "interactive", "finished")
+    case .interactive(let session):
+        check("less opens a session", "interactive", "interactive")
+        check("alt screen entered", "true", "\(session.initialFrame.contains("\u{1B}[?1049h"))")
+        check("frame draws the first page", "true", "\(session.initialFrame.contains("l1"))")
+        check("frame stops at the page size", "true", "\(!session.initialFrame.contains("l4"))")
+        check("status line has the title", "true", "\(session.initialFrame.contains("big.txt"))")
+        check("status line has the position", "true", "\(session.initialFrame.contains("1-3/6"))")
+        // 40 columns is not enough for the long hint, so the short one must show.
+        check("status line shortens its hint", "true", "\(session.initialFrame.contains("spc/b/j/k/G/q"))")
+        check("status is reverse video", "true", "\(session.initialFrame.contains("\u{1B}[7m"))")
+
+        // space pages forward, b goes back, j moves one line.
+        check("space pages forward", "true", "\(stepText(session.handle(key: " ")).contains("l4"))")
+        check("b pages back", "true", "\(stepText(session.handle(key: "b")).contains("l1"))")
+        check("j scrolls one line", "true", "\(stepText(session.handle(key: "j")).contains("l2"))")
+        check("k scrolls back up", "true", "\(stepText(session.handle(key: "k")).contains("l1"))")
+        check("G goes to the end", "true", "\(stepText(session.handle(key: "G")).contains("l6"))")
+        check("g goes to the top", "true", "\(stepText(session.handle(key: "g")).contains("l1"))")
+        check("named keys work too", "true", "\(stepText(session.handle(key: InteractiveKey.space)).contains("l4"))")
+
+        // Search: `/`, type, Enter. `n` repeats.
+        _ = session.handle(key: "g")
+        _ = session.handle(key: "/")
+        let afterOneCharacter = session.handle(key: "l")
+        check("search draft appears", "true", "\(stepText(afterOneCharacter).contains("/l"))")
+        let afterTwo = session.handle(key: "5")
+        check("draft grows with typing", "true", "\(stepText(afterTwo).contains("/l5"))")
+        let afterBackspace = session.handle(key: InteractiveKey.backspace)
+        check("backspace edits the draft", "true", "\(stepText(afterBackspace).contains("/l") && !stepText(afterBackspace).contains("/l5"))")
+        _ = session.handle(key: "5")
+        let found = session.handle(key: InteractiveKey.enter)
+        check("search stays out of the not-found path", "true", "\(!stepText(found).contains("not found"))")
+        check("search highlights the match", "true", "\(stepText(found).contains("\u{1B}[7ml5"))")
+        _ = session.handle(key: "g")
+        check("n repeats the search", "true", "\(stepText(session.handle(key: "n")).contains("l5"))")
+
+        let missing = session.handle(key: "/")
+        _ = missing
+        _ = session.handle(key: "z")
+        _ = session.handle(key: "z")
+        check("a missing pattern says so", "true", "\(stepText(session.handle(key: InteractiveKey.enter)).contains("not found"))")
+
+        // Quitting leaves the alternate screen, which is the whole point.
+        let quit = session.handle(key: "q")
+        check("q finishes", "true", "\(isFinished(quit))")
+        check("q leaves the alt screen", "true", "\(stepText(quit).contains("\u{1B}[?1049l"))")
+    }
+
+    // `more` walks one line per Enter and prompts the classic way.
+    switch engine.runInteractive("more big.txt") {
+    case .finished:
+        check("more opens a session", "interactive", "finished")
+    case .interactive(let session):
+        check("more opens a session", "interactive", "interactive")
+        check("more prompts with --More--", "true", "\(session.initialFrame.contains("--More--"))")
+        check("enter advances one line", "true", "\(stepText(session.handle(key: InteractiveKey.enter)).contains("l4"))")
+    }
+
+    // The engine hands the first frame out through Outcome.result as well.
+    let outcome = engine.runInteractive("less big.txt")
+    check("outcome.result carries the frame", "true", "\(outcome.result.output.contains("l1"))")
+    check("outcome.result carries the session", "true", "\(outcome.result.session != nil)")
+
+    // A missing file is still an error, session or not.
+    checkExit("less on a missing file", 1, engine.run("less nope.txt").exitCode)
 }
 
 print("")

@@ -19,8 +19,8 @@ enum WasmFixtures {
     static let add: [UInt8] = decode("AGFzbQEAAAABBwFgAn9/AX8DAgEABgsCfwBBBwt/AUEACwcaAwNhZGQAAAZhbnN3ZXIDAAdjb3VudGVyAwEKCQEHACAAIAFqCw==")
     /// Node result: {"classify0": 10, "classify1": 20, "classify9": 30, "fib10": 55, "fib20": 6765}
     static let controlflow: [UInt8] = decode("AGFzbQEAAAABBgFgAX8BfwMDAgAABxICA2ZpYgAACGNsYXNzaWZ5AAEKVAI3AQV/QQAhAkEBIQNBACEEAkADQCAEIABODQEgAiADaiEFIAMhAiAFIQMgBEEBaiEEDAALCyACCxoAAkACQAJAIAAOAgABAgtBCg8LQRQPC0EeCw==")
-    /// Node result: {"byte0": 119, "grow": 1, "pages": 1, "roundtrip": 123456}
-    static let memory: [UInt8] = decode("AGFzbQEAAAABCgJgAX8Bf2AAAX8DBQQAAAEBBQQBAQEEBy8FBm1lbW9yeQIACXJvdW5kdHJpcAAAB2J5dGVfYXQAAQVwYWdlcwACBGdyb3cAAwokBA4AQQAgADYCAEEAKAIACwcAIAAtAAALBAA/AAsGAEEBQAALCxABAEEQCwp3YXNtLWRhdGEK")
+    /// Node result: {"byte0": 119, "grow": 1, "pages": 1, "poke": 1, "pokeOutOfBounds": "RuntimeError: memory access out of bounds", "roundtrip": 123456}
+    static let memory: [UInt8] = decode("AGFzbQEAAAABEANgAX8Bf2AAAX9gAn9/AX8DBgUAAAEBAgUEAQEBBAc2BgZtZW1vcnkCAAlyb3VuZHRyaXAAAAdieXRlX2F0AAEFcGFnZXMAAgRncm93AAMEcG9rZQAECjAFDgBBACAANgIAQQAoAgALBwAgAC0AAAsEAD8ACwYAQQFAAAsLACAAIAE2AgBBAQsLEAEAQRALCndhc20tZGF0YQo=")
     /// Node result: {}
     static let spin: [UInt8] = decode("AGFzbQEAAAABBAFgAAADAgEABwsBB2ZvcmV2ZXIAAAoJAQcAA0AMAAsL")
     /// Node result: {"divide": 50}

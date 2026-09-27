@@ -55,4 +55,24 @@ struct TerminalViewControllerTests {
         #expect(controller.inputField.text == "")
         #expect(controller.outputLabel.text?.contains("$ ^C") == true)
     }
+
+    @Test("A pager takes the screen and gives it back")
+    func pagerWiring() {
+        let controller = TerminalViewController()
+        controller.loadViewIfNeeded()
+        controller.submit("printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' > pager.txt")
+        controller.submit("less pager.txt")
+        #expect(controller.isShowingPager)
+        // The status line is what proves the screen belongs to the pager now.
+        #expect(controller.outputLabel.text?.contains("1-7/7") == true)
+        // Keys from the accessory bar reach the pager instead of the shell.
+        controller.handleKey(" ")
+        #expect(controller.isShowingPager)
+        controller.handleKey("q")
+        #expect(controller.isShowingPager == false)
+        // And the shell is usable again, with the main screen intact.
+        controller.submit("echo after")
+        #expect(controller.outputLabel.text?.hasSuffix("after") == true)
+        #expect(controller.outputLabel.text?.contains("$ less pager.txt") == true)
+    }
 }

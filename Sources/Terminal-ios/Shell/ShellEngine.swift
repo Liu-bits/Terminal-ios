@@ -7,6 +7,13 @@ struct ShellResult {
     var output: String
     var exitCode: Int
     var clearScreen: Bool
+    /// Set when a command took the screen and is still running.
+    ///
+    /// Only a top-level `runInteractive` line can produce one: pipelines,
+    /// scripts and functions run with interactive mode off, so a pager inside
+    /// them behaves like `cat` - which is what the real programs do when their
+    /// output is not a terminal.
+    var session: InteractiveSession?
 
     static func output(_ text: String, exitCode: Int = 0) -> ShellResult {
         ShellResult(output: text, exitCode: exitCode, clearScreen: false)
@@ -70,6 +77,56 @@ final class ShellEngine {
     /// Runs one interactive line. Returns output text plus a clear-screen flag.
     @discardableResult
     func run(_ line: String) -> ShellResult {
+        // Non-interactive by definition: this is what scripts, tests and
+        // pipelines use, and a command here never gets the screen.
+        let saved = interactiveAllowed
+        interactiveAllowed = false
+        defer { interactiveAllowed = saved }
+        return runLine(line)
+    }
+
+    /// Runs a line at the top level, where one command may take the screen.
+    ///
+    /// Returns `.interactive` when a command is still running: the caller draws
+    /// the frame, routes keystrokes to the session and shows whatever the
+    /// session finally returns.
+    func runInteractive(_ line: String) -> Outcome {
+        let saved = interactiveAllowed
+        interactiveAllowed = true
+        defer { interactiveAllowed = saved }
+        let result = runLine(line)
+        if let session = result.session {
+            return .interactive(session)
+        }
+        return .finished(result)
+    }
+
+    /// What `runInteractive` produced.
+    enum Outcome {
+        case finished(ShellResult)
+        case interactive(InteractiveSession)
+
+        /// The result to show, whether or not a session is attached.
+        var result: ShellResult {
+            switch self {
+            case .finished(let result):
+                return result
+            case .interactive(let session):
+                return ShellResult(
+                    output: session.initialFrame,
+                    exitCode: 0,
+                    clearScreen: false,
+                    session: session
+                )
+            }
+        }
+    }
+
+    /// Set while a top-level line runs. Cleared for scripts and functions so a
+    /// pager invoked from inside them cannot grab the screen.
+    private var interactiveAllowed = false
+
+    private func runLine(_ line: String) -> ShellResult {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return .output("")
@@ -114,6 +171,10 @@ final class ShellEngine {
         stdin: String?
     ) -> ShellResult {
         let savedInput = session.setInput(stdin)
+        // Inside a script the screen belongs to the script, not to one command.
+        let savedInteractive = interactiveAllowed
+        interactiveAllowed = false
+        defer { interactiveAllowed = savedInteractive }
         let runner = ShellScriptRunner(session: session) { [weak self] line in
             self?.executeLine(line) ?? .output("")
         }
@@ -236,7 +297,7 @@ final class ShellEngine {
             return evaluatePipeline(commands)
         case .and(let left, let right):
             let first = evaluate(left)
-            if first.clearScreen {
+            if first.clearScreen || first.session != nil {
                 return first
             }
             guard first.exitCode == 0 else {
@@ -245,7 +306,7 @@ final class ShellEngine {
             return combine(first, evaluate(right))
         case .or(let left, let right):
             let first = evaluate(left)
-            if first.clearScreen {
+            if first.clearScreen || first.session != nil {
                 return first
             }
             guard first.exitCode != 0 else {
@@ -254,10 +315,15 @@ final class ShellEngine {
             return combine(first, evaluate(right))
         case .sequence(let left, let right):
             let first = evaluate(left)
-            if first.clearScreen {
+            if first.clearScreen || first.session != nil {
                 return first
             }
-            return combine(first, evaluate(right))
+            let second = evaluate(right)
+            // `a; b` cannot continue once b owns the screen.
+            if second.session != nil {
+                return second
+            }
+            return combine(first, second)
         }
     }
 
@@ -294,9 +360,23 @@ final class ShellEngine {
             let step = runCommand(
                 argv: expanded,
                 stdin: stdin,
-                stdinFile: command.stdinFile.map { environment.expand($0) }
+                stdinFile: command.stdinFile.map { environment.expand($0) },
+                // A single command, no pipe feeding it and no file to write to:
+                // only then may it take the screen.
+                interactive: interactiveAllowed
+                    && commands.count == 1
+                    && stdin == nil
+                    && command.stdoutFile == nil
             )
             lastExit = step.exitCode
+            if let session = step.session {
+                return ShellResult(
+                    output: step.output,
+                    exitCode: step.exitCode,
+                    clearScreen: false,
+                    session: session
+                )
+            }
             // Record after every stage so `$?` reflects the command that ran
             // last inside `a; b` and `a && b`, not just the whole line.
             session.record(status: step.exitCode)
@@ -327,21 +407,29 @@ final class ShellEngine {
         var output: String
         var exitCode: Int
         var clearScreen: Bool
+        var session: InteractiveSession?
 
         init(_ result: ShellResult) {
             output = result.output
             exitCode = result.exitCode
             clearScreen = result.clearScreen
+            session = result.session
         }
 
-        init(output: String, exitCode: Int, clearScreen: Bool) {
+        init(output: String, exitCode: Int, clearScreen: Bool, session: InteractiveSession? = nil) {
             self.output = output
             self.exitCode = exitCode
             self.clearScreen = clearScreen
+            self.session = session
         }
     }
 
-    private func runCommand(argv: [String], stdin: String?, stdinFile: String?) -> StepResult {
+    private func runCommand(
+        argv: [String],
+        stdin: String?,
+        stdinFile: String?,
+        interactive: Bool = false
+    ) -> StepResult {
         let input: String?
         if let stdinFile {
             guard let url = environment.resolve(stdinFile),
@@ -412,7 +500,7 @@ final class ShellEngine {
             return StepResult(runNodes(body, name: name, args: args, stdin: input))
         }
 
-        let context = makeContext(stdin: input)
+        let context = makeContext(stdin: input, interactive: interactive)
         if let builtin = ShellBuiltins.lookup(name) {
             let result = builtin.run(args, context)
             // Built-ins may mutate variables (`export`, `unset`, `read`).
@@ -446,7 +534,7 @@ final class ShellEngine {
     }
 
     /// Builds the context handed to a built-in, wiring the engine hooks.
-    private func makeContext(stdin: String?) -> ShellRunContext {
+    private func makeContext(stdin: String?, interactive: Bool = false) -> ShellRunContext {
         let context = ShellRunContext(environment: session.environment, stdin: stdin) { [weak self] line in
             self?.executeLine(line) ?? .output("")
         }
@@ -459,6 +547,7 @@ final class ShellEngine {
         }
         context.session = session
         context.colorizeOutput = session.environment.colorEnabled
+        context.interactive = interactive
         return context
     }
 

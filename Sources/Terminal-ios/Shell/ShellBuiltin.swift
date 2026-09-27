@@ -36,6 +36,22 @@ final class ShellRunContext {
     /// The owning session, so commands such as `read` can consume script input.
     var session: ShellSession?
 
+    /// True when this command may take the screen and wait for keys.
+    ///
+    /// Off by default: only `ShellEngine.runInteractive` turns it on, and only
+    /// for a lone command with no pipe or redirection. Everything else (scripts,
+    /// functions, pipelines, the tests) sees the same value as before.
+    var interactive = false
+
+    /// Screen size for commands that need one, from `$LINES` / `$COLUMNS`.
+    var terminalRows: Int {
+        Int(environment.variables["LINES"] ?? "") ?? 24
+    }
+
+    var terminalColumns: Int {
+        Int(environment.variables["COLUMNS"] ?? "") ?? 80
+    }
+
     /// Whether commands should emit ANSI colour.
     ///
     /// Off by default, so pipes, tests and captured output compare plain text.

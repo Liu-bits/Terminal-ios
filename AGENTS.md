@@ -155,6 +155,10 @@ Engineering rules that follow from the table:
     - `ShellBuiltin` - `ShellRunContext` (what a command may touch), `ShellArgs`
       flag/operand parser, shared file helpers
     - `BuiltinsFile` / `BuiltinsText` / `BuiltinsSystem` - the command surface
+    - `Interactive` - the channel a command uses to keep the screen: an
+      `InteractiveSession` gets keys and returns frames, so a pager is driven
+      by a script of keys in tests instead of a simulator
+    - `BuiltinsPager` - `less`/`more` and the session behind them
     - `TextSed` - the `sed` program, kept apart from the built-in that drives
       it because splitting a script into commands (ignoring `;` inside an
       `s///` body or a regex address) is the easy part to get wrong
@@ -250,6 +254,10 @@ Engineering rules that follow from the table:
   `expr` `eval` `sh` `source` `.` `which` `type` `command` `help` `man` `version`
 - **packages** - `apt` `apt-get` `apk` `pip` `pip3` `winget`; runtimes declared in the
   catalog: `python3` `python` `py` `gcc` `cc` `clang` `make`
+- **pager** - `less` and `more` over a file or stdin: space/b page, j/k move a
+  line, g/G go to the ends, `/pattern` searches (Enter runs it, `n` repeats),
+  q/Esc/Ctrl-C quit. They run on the alternate screen, so the scrollback is
+  untouched when they exit.
 - **wasm** - `wasm run <module.wasm> [args...]`, `wasm info <module.wasm>`,
   `wasm --version` (the bundled interpreter)
 - **powershell** - `Get-Location` `Set-Location` `Get-ChildItem` `Get-Item`
@@ -349,6 +357,35 @@ shell. `ls` colours by type (directory blue bold, executable green bold, symlink
 cyan, archive red, image magenta) and only the *name*, keeping the mode/size/
 date columns aligned; `grep` highlights matches (bold red), file prefixes
 (magenta) and line numbers (green), and never highlights `-v` output.
+
+## Interactive commands: the key channel
+
+The engine is synchronous, so a command cannot block on stdin. Interactive
+commands work the other way round instead: the command hands back a session.
+
+- `ShellResult.session` carries an `InteractiveSession`; `runInteractive(_:)`
+  returns `.finished(ShellResult)` or `.interactive(session)`. `run(_:)` keeps
+  its old behaviour and never allows a session, which is why scripts, functions
+  and pipelines are unaffected.
+- Only a **lone command with no pipe and no redirection** may take the screen.
+  The pipeline runner decides that (`commands.count == 1`, no stdin, no
+  `stdoutFile`), and `runNodes` clears the flag again so a pager invoked from a
+  script cannot grab the screen - inside a script it behaves like `cat`, which is
+  what the real programs do when stdout is not a terminal.
+- A session exposes `initialFrame` and `handle(key:) -> InteractiveStep`
+  (`.frame(text)` or `.finished(text, code)`). Keys are strings: printable
+  characters plus `Enter`, `Backspace`, `Escape`, `Up`, `Down`, `PageUp`,
+  `PageDown`, `Space`, `Ctrl-C`.
+- Frames are ordinary escape output (`ESC[?1049h`, `ESC[H`, `ESC[2J`, `ESC[7m`),
+  so the grid in `Terminal/` does the drawing and the view controller only
+  appends the frame and re-renders once. No pager drawing code lives in UIKit.
+- `TerminalViewController` routes keys while a session is active: typed
+  characters, Return and the accessory bar all go to `send(key:)` instead of the
+  shell line, the prompt turns into `:` with a key hint, and quitting restores
+  the main screen (and the shell).
+- Screen size comes from `$LINES`/`$COLUMNS`, which the view controller updates
+  from the measured font metrics; `ShellRunContext.terminalRows/Columns` read
+  them with 24x80 fallbacks.
 
 ## WebAssembly engine (Phase 2 foundation)
 
@@ -491,7 +528,7 @@ preference. Verify the result with `gh api repos/Liu-bits/Terminal-ios/commits/m
   it turns a 12-minute CI round trip into a 40-second loop:
 
   ```bash
-  python support/local_check.py          # 267 scenarios, fails loudly on regressions
+  python support/local_check.py          # 301 scenarios, fails loudly on regressions
   ```
 
   It copies `Shell/`, `Packages/`, `WebAssembly/` and the model half of `Terminal/` into a
@@ -629,10 +666,11 @@ support/push_via_api.py                              # push path when `git push`
    scrollback) and `AccessoryKeyBar`; the controller already mixes layout with
    execution. The screen model it draws is done and tested, so this is a straight
    refactor with no behaviour change.
-2. Interactive commands: the grid now supports the alternate screen and the
-   scrolling region, so `less`/`vim`-style tools are blocked only by the engine
-   being synchronous. Adding an input channel (the UI feeds keys into a running
-   command) is what unlocks a pager - do it before promising `less`.
+2. More commands on the key channel that now exists: `less` and `more` are
+   done, and the same `InteractiveSession` shape would carry a `top`-style
+   viewer or a small `vi`. What is still missing for a real editor is sustained
+   raw input (arrow keys and paste come from the accessory bar, not a raw tty
+   stream) and a way for a running command to see the file change.
 3. Phase 2 core: the WASM interpreter landed (see the section above). Next is to
    make it complete enough for real payloads - build a CPython-for-WASM module,
    put it in the catalog, and fix whatever the interpreter turns out to be

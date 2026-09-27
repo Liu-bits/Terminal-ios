@@ -17,6 +17,13 @@ final class TerminalViewController: UIViewController {
     /// bars, cursor addressing and colour behave like a real terminal.
     private(set) var output = TerminalOutput()
 
+    /// The command currently owning the screen (`less`, `more`), if any.
+    private var interactiveSession: InteractiveSession?
+
+    /// True while a command owns the screen. Keystrokes go to it instead of the
+    /// shell until it finishes.
+    var isShowingPager: Bool { interactiveSession != nil }
+
     private let scrollView = UIScrollView()
     let outputLabel = UILabel()
     private let promptLabel = UILabel()
@@ -157,6 +164,21 @@ final class TerminalViewController: UIViewController {
     }
 
     func handleKey(_ key: String) {
+        if interactiveSession != nil {
+            // While a pager owns the screen the key bar talks to it: space to
+            // page, `q` (or Esc / Ctrl+C) to quit.
+            switch key {
+            case "Tab":
+                send(key: " ")
+            case "Esc":
+                send(key: InteractiveKey.escape)
+            case "Ctrl+C":
+                send(key: InteractiveKey.interrupt)
+            default:
+                send(key: key)
+            }
+            return
+        }
         switch key {
         case "Ctrl+C":
             inputField.text = ""
@@ -182,17 +204,71 @@ final class TerminalViewController: UIViewController {
         if trimmed.isEmpty {
             return
         }
-        let result = engine.run(line)
-        if result.clearScreen {
-            output.reset()
-            render()
+        // A command may take the screen instead of returning output; that is what
+        // turns `less` into a real pager rather than a cat.
+        switch engine.runInteractive(line) {
+        case .interactive(let session):
+            interactiveSession = session
+            updatePromptForSession()
+            output.append(session.initialFrame)
+            renderInteractive(session.initialFrame)
+        case .finished(let result):
+            if result.clearScreen {
+                output.reset()
+                render()
+                return
+            }
+            if !result.output.isEmpty {
+                appendLine(result.output)
+            }
+            if result.exitCode != 0 {
+                appendLine("[exit \(result.exitCode)]")
+            }
+        }
+    }
+
+    // MARK: - Interactive commands
+
+    /// Routes one keystroke to the command that owns the screen.
+    func send(key: String) {
+        guard let session = interactiveSession else {
             return
         }
-        if !result.output.isEmpty {
-            appendLine(result.output)
+        switch session.handle(key: key) {
+        case .frame(let text):
+            output.append(text)
+            renderInteractive(text)
+        case .finished(let text, let code):
+            interactiveSession = nil
+            output.append(text)
+            render()
+            updatePromptForSession()
+            if code != 0 {
+                appendLine("[exit \(code)]")
+            }
         }
-        if result.exitCode != 0 {
-            appendLine("[exit \(result.exitCode)]")
+    }
+
+    /// Renders a pager frame. VoiceOver gets the visible text of the screen
+    /// rather than the escapes, which is what a user of a pager actually needs.
+    private func renderInteractive(_ frame: String) {
+        outputLabel.attributedText = attributedOutput()
+        let spoken = ANSIParser.strip(frame)
+        outputLabel.accessibilityValue = spoken
+        UIAccessibility.post(notification: .announcement, argument: spoken)
+        view.layoutIfNeeded()
+        let bottom = CGPoint(x: 0, y: max(0, scrollView.contentSize.height - scrollView.bounds.height))
+        scrollView.setContentOffset(bottom, animated: true)
+    }
+
+    /// The prompt row says which mode the terminal is in.
+    private func updatePromptForSession() {
+        if interactiveSession != nil {
+            promptLabel.text = ":"
+            inputField.placeholder = "space / b / j / k / G / q / …"
+        } else {
+            promptLabel.text = "$"
+            inputField.placeholder = nil
         }
     }
 
@@ -331,6 +407,11 @@ final class TerminalViewController: UIViewController {
             return
         }
         let columns = max(20, Int(available / characterWidth))
+        // Commands that need a screen size read these; the pager uses LINES to
+        // decide how much fits above its status line.
+        let lineHeight = max(1, outputFont.lineHeight)
+        let lines = max(6, Int(scrollView.bounds.height / lineHeight))
+        engine.environment.variables["LINES"] = "\(lines)"
         guard columns != output.screen.columns else {
             return
         }
@@ -343,8 +424,28 @@ final class TerminalViewController: UIViewController {
 extension TerminalViewController: UITextFieldDelegate {
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        if interactiveSession != nil {
+            send(key: InteractiveKey.enter)
+            return false
+        }
         submit(textField.text ?? "")
         textField.text = ""
+        return false
+    }
+
+    /// While a command owns the screen, typed characters are keys for it - they
+    /// must not end up in the shell's input line.
+    func textField(
+        _ textField: UITextField,
+        shouldChangeCharactersIn range: NSRange,
+        replacementString string: String
+    ) -> Bool {
+        guard interactiveSession != nil else {
+            return true
+        }
+        for character in string {
+            send(key: String(character))
+        }
         return false
     }
 }

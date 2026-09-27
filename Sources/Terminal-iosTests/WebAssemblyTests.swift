@@ -85,9 +85,15 @@ struct WebAssemblyTests {
         #expect(try instance.invoke(export: "pages").first?.description == "2")
         // The data segment landed where the fixture put it.
         #expect(String(decoding: try instance.readMemory(at: 16, count: 5), as: UTF8.self) == "wasm-")
+        // `poke(addr, value)` really stores where it is told, so an
+        // out-of-bounds address is expressible; `roundtrip` could not do this.
+        #expect(try instance.invoke(export: "poke", arguments: [.i32(4), .i32(7)]).first?.description == "1")
+        #expect(try instance.invoke(export: "byte_at", arguments: [.i32(4)]).first?.description == "7")
         // Out-of-bounds access traps instead of crashing.
         do {
-            _ = try instance.invoke(export: "roundtrip", arguments: [.i32(70_000)])
+            // Well past the two pages this test has grown to; 70_000 would
+            // still be inside them and would not trap at all.
+            _ = try instance.invoke(export: "poke", arguments: [.i32(999_999), .i32(1)])
             Issue.record("an out-of-bounds store should trap")
         } catch let trap as WasmTrap {
             #expect(trap.message.contains("out of bounds"))
